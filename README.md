@@ -45,11 +45,20 @@ To test the ABCT hypothesis, the code performs:
 
 ## 📊 Key Findings
 
-The research analyzes the tension between different stages of production and monetary aggregates. Key insights include:
+This empirical investigation applied the **Toda-Yamamoto (1995)** methodology on **VARX models** (controlling for the Federal Funds Rate) to test Austrian Business Cycle Theory (ABCT) hypotheses in Brazil. The results reveal a complex landscape of **partial validation**:
 
-1.  **Credit Expansion:** Analysis of how artificial credit expansion impacted capital allocation.
-2.  **Sectoral Distortions:** Examination of the "Cantillon Effect" and how different sectors (High vs. Low capital intensity) responded to interest rate fluctuations.
-3.  **Recessionary Phases:** Correlation between the reversal of monetary policies and the onset of economic downturns in the analyzed period.
+1.  **The Wicksellian Effect (Validated):**
+    The study found significant empirical evidence that the expansion of the **M2 monetary aggregate** temporally precedes the widening gap between the natural interest rate (proxied by savings) and the market rate. This corroborates the intertemporal distortion mechanism postulated by Wicksell and Mises.
+
+2.  **Monetary Transmission (Robust):**
+    The most robust results were observed in the transmission channels. Approximately **51.7% of the tested models** (30 out of 58) demonstrated statistical significance when analyzing the relationship between monetary expansion and interest rate spreads.
+
+3.  **Impact on Real Output (Divergent):**
+    Contrary to theoretical predictions, models focusing on **Productive Aggregates (GDP and sectoral variations)** did not yield statistically significant results. This suggests that while the monetary transmission to interest rates is evident, its measurable impact on the physical structure of production in Brazil is less clear or overshadowed by other factors.
+
+4.  **Methodological Limitations:**
+    * The **"Forced Savings"** hypothesis remained inconclusive due to serial autocorrelation and heteroscedasticity constraints in the credit data.
+    * Monetary effects in the Brazilian economy appear to **dissipate faster** than theoretically predicted.
 
 *(For the complete econometric results and theoretical discussion, please refer to the PDF file).*
 
