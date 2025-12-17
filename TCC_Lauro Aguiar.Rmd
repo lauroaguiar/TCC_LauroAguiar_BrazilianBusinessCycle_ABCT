@@ -1,0 +1,5224 @@
+---
+title: "A Teoria Austríaca dos Ciclos EConômicos Econômicos (TACE) é Capaz de Explicar os Ciclos Brasileiros?"
+author: "Lauro Aguiar"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true      # Gera um sumário automático
+    number_sections: true  # Numera as seções
+fontsize: 12pt     # Tamanho da fonte padrão (conforme ABNT)
+linestretch: 1.5   # Espaçamento entre linhas
+geometry: a4paper  # Tamanho do papel A4
+documentclass: article  # Classe de documento LaTeX
+bibliography: referencias.bib  # Arquivo de referências
+csl: abnt.csl  # Estilo ABNT para citações e referências
+---
+
+git
+```{r}
+library(usethis)
+use_git()
+```
+
+
+Pallete 
+
+```{r}
+"#002C5E"
+"#02023C"
+"#FEB712"
+"#A6A6A6"
+"#46B1E1"
+"#3A3A3A"
+```
+
+# 1 📚 PACKAGES
+
+```{r}
+# Criação do vetor com todas as bibliotecas
+pkg <- c(
+  "scales",
+  "gridExtra",
+  "grid",
+  "png",
+  "xtable",
+  "sidrar",
+  "readxl",
+  "rbcb",
+  "BETS",
+  "tidyverse",
+  "magrittr",
+  "zoo",
+  "janitor",
+  "lubridate",
+  "knitr",
+  "GetBCBData",
+  "timetk",
+  "kableExtra",
+  "dplyr",
+  "tseries",
+  "vars",
+  "ggplot2",
+  "lmtest",
+  "tibble",
+  "tsibble",
+  "urca",
+  "forecast",
+  "reshape2",
+  "deflateBR",
+  "seasonal",
+  "RcppRoll",
+  "feasts",
+  "httr",
+  "openxlsx",
+  "gdata",
+  "rio",
+  "mFilter",
+  "patchwork",
+  "writexl",
+  "xts",
+  "forecast",
+  "purr",
+  "fUnitRoots",
+  "foreach",
+  "parallel",
+  "doSNOW",
+  "aod",
+  "strucchange"
+)
+
+devtools::install_github('msperlin/GetTDData',force = TRUE)
+
+# Função para instalar os pacotes que não estão instalados
+install_if_missing <- function(pkg) {
+  new_pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new_pkg)) install.packages(new_pkg)
+}
+
+# Instalar pacotes faltantes
+install_if_missing(pkg)
+
+# Carregar todos os pacotes
+lapply(pkg, library, character.only = TRUE)
+```
+
+Função para importar séries manualmente (usar quando RBCB não funcionar)
+
+```{r}
+get_bc_series <- function(code, start_date = "2004-01-01", end_date = "2024-12-01") {
+  # URL da API do Banco Central
+  url <- paste0("https://api.bcb.gov.br/dados/serie/bcdata.sgs.", code, "/dados?formato=json")
+  
+  # Requisição dos dados
+  data <- jsonlite::fromJSON(url)
+  
+  # Converter a coluna 'data' para Date
+  data$data <- as.Date(data$data, format = "%d/%m/%Y")
+  
+    # Converter start_date e end_date para o tipo Date
+  start_date <- as.Date(start_date)
+  end_date <- as.Date(end_date)
+  
+  # Filtrar pelos dados após a data de início
+  filtered_data <- data[data$data >= start_date & data$data <= end_date, ]
+  
+  # Verificar se há dados suficientes
+  if (nrow(filtered_data) == 0) {
+    stop("Nenhum dado disponível para o período especificado (entre start_date e end_date).")
+  }
+  
+  # Criar a série temporal
+  ts(as.numeric(filtered_data$valor), 
+     start = c(as.numeric(format(min(filtered_data$data), "%Y")), 
+               as.numeric(format(min(filtered_data$data), "%m"))), 
+     frequency = 12)
+}
+```
+
+#_________
+
+# 2 📈 DATA
+
+## 2.1 Import
+
+### Moeda
+
+```{r}
+#DV (START DATE - 03/12/2001) R$ u.m.c. (mil)
+DV <- get_series(27787, start_date = "2004-01-01", end_date = "2024-12-01") %>% 
+  pull('27787') %>%
+  ts(start = c(2004, 01), frequency = 12)
+
+#M1 (START DATE - 03/12/2001), period = Mensal R$ u.m.c. (mil)
+M1 <- get_series(27841, start_date = "2004-01-01", end_date = "2024-12-01") %>% 
+  pull('27841') %>%
+  ts(start = c(2004, 01), frequency = 12)
+
+#M2 (START DATE - 01/12/2001), period = Mensal R$ u.m.c. (mil)
+M2 <- get_series(27842, start_date = "2004-01-01", end_date = "2024-12-01") %>% 
+  pull('27842') %>%
+  ts(start = c(2004, 01), frequency = 12)
+```
+
+### Spread
+
+*Definição:* é Diferença entre as taxas de juros de LP e CP
+
+SPREAD = LN [(1 + taxa natural de juros) ÷ (1 + taxa de juros de mercado)].
+
+**Taxa de Juros de Curto Prazo:** 
+
+OVER - Taxa Selic over SWAP.
+
+Swaps DI pré-fixada com prazo de 180 dias.
+
+**Taxa de Juros de Longo Prazo:** 
+
+IDkA - Índice IDkA indexado ao IPCA com duração de 10 anos. 
+
+POUP - Taxa de poupança.
+
+#### i CP
+
+```{r SPREAD1}
+#Taxa Selic Over (START DATE - 31/07/1986), period = Mensal
+OVER <- get_series(4189, start_date = "2004-01-01", end_date = "2024-12-01") %>% 
+  pull('4189') %>%
+  ts(start = c(2004, 01), frequency = 12)
+
+
+SWAPcode <- "BMF12_SWAPDI180F12"
+ 
+# Ler página usando web-scrapping
+raw_data <- httr::GET(
+sprintf("http://ipeadata.gov.br/api/odata4/ValoresSerie(SERCODIGO='%s')", "BMF12_SWAPDI180F12")
+)
+ 
+# Tratar dados
+SWAP <- httr::content(raw_data)[[2]] %>% 
+dplyr::bind_rows() %>% 
+dplyr::select("date" = `VALDATA`, "value" = `VALVALOR`) %>% 
+dplyr::mutate(date = lubridate::as_date(date))
+
+SWAP <- SWAP %>% 
+  filter(date >= as.Date("2004-01-01") & date<= as.Date("2024-12-01"))
+```
+
+#### i LP
+
+```{r}
+#IDkA
+#https://data.anbima.com.br/indices/consulta/idka/resultados-diarios/idka-ipca-10a
+# 1) Ler a base bruta
+caminho_IDKA10 <- "C:\\Users\\lauro\\OneDrive\\Aleatório\\TCC\\BD\\IDKA10Bruta.xlsx" #Mudar o caminho!!!
+IDKA10Bruta <- read_excel(caminho_IDKA10, sheet = "Historico")
+
+
+# Fui tolo, era só baixar os dados diretamente do site do tesouro, já que são apenas duas planilhas (2005 e 2004). Ao menos aprendi sobre esse pacote.
+
+#NTN-B
+assets <- 'NTN-B'   # Identifier of assets 
+first_year <- 2004
+last_year <- 2005
+
+NTNB24_2005 <- GetTDData::td_get(asset_codes = "NTN-B",
+                first_year=2004,
+                last_year)
+
+#Filtro do título com vencimento em Ago/24 
+
+NTNB24_2005 <- NTNB24_2005 %>%
+  filter(asset_code == "NTN-B 150824")
+
+# Filtro do ano de 2005
+
+NTNB24_2005 <- NTNB24_2005 %>%
+  filter(format(ref_date, "%Y") == "2005")
+
+# Inserindo 2004
+caminho_NTNB24_2004 <- "C:\\Users\\lauro\\OneDrive\\Aleatório\\TCC\\BD\\NTNB24_2004.xlsx"
+NTNB24_2004 <- read_excel(caminho_NTNB24_2004, sheet = "NTNB24_2004")
+
+# Converter a coluna ref_date para Date
+NTNB24_2004 <- NTNB24_2004 %>%
+  mutate(ref_date = as.Date(ref_date))
+
+#Combinação
+NTNB24B <- bind_rows(NTNB24_2004, NTNB24_2005)
+
+# Taxa de Poupança
+
+DadosPoupancaBruto <- sidrar::get_sidra(
+  api = "/t/2072/n1/all/v/933,938,940/p/last%2084",
+  format = "tidy"
+)
+```
+
+Treatement: IDKA
+
+```{r}
+# Carregar os pacotes necessários
+library(dplyr)
+library(lubridate)
+
+IDKA10 <- IDKA10Bruta %>%
+  dplyr::select(`Data de Referência`, `Variação Diária (%)`) %>%
+  mutate(
+    Data = as.Date(`Data de Referência`, format = "%Y-%m-%d"),
+    Ano = year(Data),
+    Mes = month(Data),
+    Trimestre = quarter(Data)
+  ) %>%
+  filter(
+    # Filtrar o período entre o primeiro trimestre de 2006 e o último trimestre de 2024
+    (Ano > 2005 | (Ano == 2005 & Trimestre == 4)) &  
+    (Ano < 2024 | (Ano == 2024 & Trimestre <= 4)),
+    # Filtrar apenas os meses de março, junho, setembro e dezembro
+    Mes %in% c(3, 6, 9, 12)
+  ) %>%
+  group_by(Ano, Trimestre) %>%
+  summarise(
+    Taxa_Trimestral = mean(`Variação Diária (%)`, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Trimestre = paste0(Trimestre)
+  )
+```
+
+Treatement: NTN-B
+
+```{r}
+# Calcular a média trimestral de yield_bid para 2005
+#    (usando a média de TODOS os dias do trimestre, para manter
+#     consistência com o método usado no código original do IDKA10)
+
+NTNB24 <- NTNB24B %>%
+  # Selecionar colunas relevantes
+  dplyr::select(ref_date, yield_bid) %>%
+  # Criar colunas de Ano e Trimestre
+  mutate(
+    Ano = year(ref_date),
+    Trimestre = quarter(ref_date),
+    Mes = month(ref_date)
+  ) %>%
+  filter(
+    Ano >= 2004,
+    # Filtrar apenas os meses de março, junho, setembro e dezembro
+    Mes %in% c(3, 6, 9, 12)
+  ) %>%
+  # Agrupar por Ano e Trimestre
+  group_by(Ano, Trimestre) %>%
+  # Calcular a média do yield_bid sobre TODOS os dias do trimestre.
+  # Nomear a coluna como 'Taxa_Trimestral' para facilitar a junção futura.
+  summarise(
+    Taxa_Trimestral = mean(yield_bid, na.rm = TRUE),
+    .groups = "drop" # Desagrupar após sumarizar
+  ) %>%
+  # Formatar a coluna Trimestre para "TX"
+  mutate(
+    Trimestre = paste0(Trimestre)
+  ) %>%
+  # Opcional: garantir a ordem T1, T2, T3, T4
+  arrange(Ano, Trimestre)
+
+```
+
+Integration: IDKA & NTN-B
+
+```{r}
+IDKA <- bind_rows(
+  IDKA10,
+  NTNB24
+)
+
+# Removendo NaN de 2005 e reordenando pelo Ano
+
+IDKA <- IDKA[!is.nan(IDKA$Taxa_Trimestral),]
+IDKA <- IDKA %>%
+  arrange(Ano)
+```
+
+### Credit
+
+```{r}
+# Saldo da Carteira de Crédito Total R$ (milhões)
+CREDT <- get_series(20539, start_date = "2004-01-01", end_date = "2024-12-01") %>% 
+  pull('20539') %>%
+  ts(start = c(2004, 01), frequency = 12)
+
+# Saldo da Carteira de Créditos Livres R$ (milhões)
+CREDL <- get_series(20542, start_date = "2007-03-01", end_date = "2024-12-01") %>% 
+  pull('20542') %>%
+  ts(start = c(2007, 03), frequency = 12)
+
+# Saldo da Carteira de Créditos Direcionados R$ (milhões)
+CREDD <- get_series(20593, start_date = "2007-03-01", end_date = "2024-12-01") %>% 
+  pull('20593') %>%
+  ts(start = c(2007, 03), frequency = 12)
+```
+
+### Product
+
+```{r}
+#Índice de atividade econômica do Banco Central (IBC-Br)
+
+# IBCBR (todas) (START DATE - 01/01/2003)
+IBCBR <- get_series(24364, start_date = "2003-11-01", end_date = "2025-01-01") %>% 
+  pull('24364') %>%
+  ts(start = c(2003, 11), frequency = 12)
+
+IBCBR_Agro <- get_series(29602, start_date = "2003-11-01", end_date = "2025-01-01-01") %>% 
+  pull('29602') %>%
+  ts(start = c(2003, 11), frequency = 12)
+
+IBCBR_Serv <- get_series(29606, start_date = "2003-11-01", end_date = "2025-01-01") %>% 
+  pull('29606') %>%
+  ts(start = c(2003, 11), frequency = 12)
+
+IBCBR_Ind <- get_series(29604, start_date = "2003-11-01", end_date = "2025-01-01") %>% 
+  pull('29604') %>%
+  ts(start = c(2003, 11), frequency = 12)
+
+IBCBR_ExAgro <- get_series(29608, start_date = "2003-11-01", end_date = "2025-01-01") %>% 
+  pull('29608') %>%
+  ts(start = c(2003, 11), frequency = 12)
+```
+
+### Industry
+
+```{r}
+# Industrial Geral (START DATE - 01/01/2002)
+INDG <- get_series(28503, start_date = "2003-11-01", end_date = "2025-01-01") %>%
+  pull('28503') %>%
+  ts(start = c(2003, 11), frequency = 12)
+
+# Bens de Capital (START DATE - 01/01/2002)
+BCAP <- get_series(28506, start_date = "2003-12-01", end_date = "2024-12-01") %>% 
+  pull('28506') %>%
+  ts(start = c(2003, 12), frequency = 12)
+
+# Bens de Consumo Duráveis (START DATE - 01/01/2002)
+BCDUR <- get_series(28509, start_date = "2003-12-01", end_date = "2024-12-01") %>%
+  pull('28509') %>%
+  ts(start = c(2003, 12), frequency = 12)
+
+# Extrativa Mineral (START DATE - 01/01/2002)
+EXTRM <- get_series(28504, start_date = "2003-12-01", end_date = "2024-12-01") %>% 
+  pull('28504') %>%
+  ts(start = c(2003, 12), frequency = 12)
+
+# Indústria de Transformação (START DATE - 01/01/2002)
+INDTR <- get_series(28505, start_date = "2003-12-01", end_date = "2024-12-01") %>% 
+  pull('28505') %>%
+  ts(start = c(2003, 12), frequency = 12)
+
+# Bens Intermediários (START DATE - 01/01/2002)
+BINT <- get_series(28507, start_date = "2003-12-01", end_date = "2024-12-01") %>% 
+  pull('28507') %>%
+  ts(start = c(2003, 12), frequency = 12)
+
+# Bens de Consumo Semi e Não Duráveis (START DATE - 01/01/2002)
+BCSND <- get_bc_series(28510, start_date = "2003-12-01", end_date = "2024-12-01")
+
+# Utilização da Capacidade Industrial Instalada (START DATE - 30/04/1970)
+UCI <- get_series(1344, start_date = "2003-12-01", end_date = "2025-03-01") %>%
+  pull('1344') %>%
+  ts(start = c(2003, 4), frequency = 4)
+```
+
+#### Industry ratios
+
+Baseado em Neira, Bagus e Aria (2013) são feitas as seguintes razões de produção, a fim de validar se a expansão monetária gera maior alocação  em bens em estágios 
+iniciais de produção comparado a bens em estágios iniciais.
+
+```{r}
+# 2.2.1.1 Índices da Indústria
+
+# Calcular as razões de produção
+IND1 <- log(BCAP / BINT) 
+IND2 <- log(BCAP / BCSND) 
+IND3 <- log(BCAP / INDTR) 
+IND4 <- log(BCDUR / BCSND) 
+IND5 <- log(BCDUR / INDTR) 
+IND6 <- log(EXTRM / INDTR) 
+IND7 <- log(INDTR / BCSND) 
+
+# Uso da função 'lag' do pacote 'stats' para séries temporais
+library(stats)
+
+# Índices de Produção com a função lag do pacote stats
+
+IIPG <- log(INDG / stats::lag(INDG, 1))  # Usar stats::lag para objetos de série temporal
+PIB <- log(IBCBR / stats::lag(IBCBR, 1))
+PIB_Ind <- log(IBCBR_Ind / stats::lag(IBCBR_Ind, 1))
+PIB_Serv <- log(IBCBR_Serv / stats::lag(IBCBR_Serv, 1))
+PIB_Agro <- log(IBCBR_Agro / stats::lag(IBCBR_Agro, 1))
+PIB_ExAgro <- log(IBCBR_ExAgro / stats::lag(IBCBR_ExAgro, 1))
+UCAP <- log(UCI / stats::lag(UCI, 1))
+
+# Ajustando os períodos
+UCAP <- window(UCAP, start = c(2004,1))
+```
+
+### IPCA
+
+```{r}
+# Índice Nacional de Preços ao Consumidor – Amplo (IPCA) (START DATE - 02/01/1980)
+IPCA <- get_series(433, start_date = "2004-01-01", end_date = "2024-12-01") %>%
+  pull('433') %>%
+  ts(start = c(2004, 01), frequency = 12)
+
+# Índice Nacional de Preços ao Consumidor – Amplo (IPCA) (START DATE - 02/01/1980) | Usada nas crédito.
+IPCACredit <- get_series(433, start_date = "2007-03-01", end_date = "2024-12-01") %>%
+  pull('433') %>%
+  ts(start = c(2007, 03), frequency = 12)
+
+#IPCAT
+# Converter a série mensal em trimestral acumulando os fatores de crescimento
+IPCAT <- aggregate(IPCA, nfrequency = 4, FUN = function(x) {
+  # acumula os 3 meses: produto dos fatores (1 + taxa/100) e depois converte para %:
+  (prod(1 + x/100) - 1) * 100
+})
+
+#vetor
+vIPCAT <- as.numeric(IPCAT)
+
+# Índice Nacional de Preços ao Consumidor – Amplo (IPCA) – Itens Livres (START DATE - 31/01/1992)
+IPCAL <- get_series(11428, start_date = "2004-01-01", end_date = "2024-12-01") %>%
+  pull('11428') %>%
+  ts(start = c(2004, 01), frequency = 12)
+```
+
+### FFR
+
+```{r}
+# Instalar e carregar os pacotes necessários
+if (!require(quantmod)) {
+  install.packages("quantmod")
+  library(quantmod)
+}
+
+if (!require(zoo)) {
+  install.packages("zoo")
+  library(zoo)
+}
+
+# Baixar a série do Federal Funds Rate do FRED
+getSymbols("FEDFUNDS", src = "FRED")
+
+# Limitar a série ao período de jan/2004 a dez/2024
+ffrb <- window(FEDFUNDS, start = "2004-01-01", end = "2024-12-31")
+
+# Selecionar apenas os meses que correspondem ao fim de trimestre: março, junho, setembro e dezembro
+meses <- as.numeric(format(zoo::index(ffrb), "%m"))
+ffr_quarterly <- ffr_monthly[meses %in% c(3, 6, 9, 12)]
+
+# Converter a série para objeto de time series (ts) com frequência trimestral
+start_year <- as.numeric(format(zoo:index(ffr_quarterly)[1], "%Y"))
+start_month <- as.numeric(format(zoo:index(ffr_quarterly)[1], "%m"))
+start_quarter <- ceiling(start_month / 3)
+
+ffr <- ts(as.numeric(ffr_quarterly), 
+                       start = c(start_year, start_quarter), 
+                       frequency = 4)
+
+# Arredondar os valores para facilitar a visualização
+ffr <- round(ffr, 2)
+
+# Plotar a série trimestral
+plot(ffr, main = "Federal Funds Rate (FFR) - Média Trimestral",
+     ylab = "Taxa (%)", xlab = "Ano")
+```
+
+### Savings
+
+- Poup: 
+
+```{r}
+# 1) Instale e carregue o pacote ipeadatar (se ainda não estiver instalado)
+# install.packages("ipeadatar")
+# library(ipeadatar)
+# 
+# # 2) Busque todas as séries que tenham “Poupança Bruta” no título
+# meta_poupanca <- series_search("Poupança Bruta")
+# head(meta_poupanca, 10)
+# # → Na saída, você verá colunas como:
+# #   series_id      title                     unit       ...
+# # 1 “XXXXXX”   “Poupança Bruta – Saldo”     “R$ Milhões”
+# # 2 “YYYYYY”   “Poupança Bruta – Variação %” “%”
+# 
+# # 3) Anote o series_id exato da série que você quer (por ex. “XXXXXX”)
+# #    e depois chame get_series(), especificando o período completo que deseja:
+# dados_poupanca_bruto <- get_series(
+#   code  = "XXXXXX",       # ← substitua aqui pelo series_id correto
+#   first = "2004-01-01",   # data inicial
+#   last  = as.character(Sys.Date())  # última data disponível
+# )
+# 
+# # 4) Veja um resumo rápido
+# head(dados_poupanca_bruto)
+# tail(dados_poupanca_bruto)
+# str(dados_poupanca_bruto)
+
+```
+
+
+*Cálculo da Taxa de Poupança em relação à Renda Nacional Disponível e Poupança Bruta*
+
+```{r}
+# ----------------------------------------------
+# Renomear coluna de código do trimestre
+# ----------------------------------------------
+
+DadosPoupancaBruto <- DadosPoupancaBruto %>%
+  rename(
+    Trimestre_Cod = "Trimestre (Código)",  # Coluna com formato "200304"
+    Variavel_Cod = "Variável (Código)",
+    Trimestre_Text = "Trimestre"
+  )
+
+# Selecionar e manipular variáveis
+DadosPoupanca <- DadosPoupancaBruto %>%
+  dplyr::select(Variavel_Cod, Trimestre_Text, Trimestre_Cod, Valor) %>%  # Incluir Trimestre_Cod
+  filter(Variavel_Cod %in% c("938", "940", "933")) %>%
+  pivot_wider(
+    names_from = Variavel_Cod,
+    values_from = Valor,
+    names_prefix = "V_"
+  ) %>%
+  rename(
+    Renda = V_938,
+    PoupancaB = V_940,
+    PIB = V_933
+  )
+
+# ----------------------------------------------
+# Conversão Trimestre para Data 
+# ----------------------------------------------
+
+# Verificar valores únicos de Trimestre_Cod
+unique(DadosPoupanca$Trimestre_Cod)
+
+# Extrair ano e trimestre do código (ex: "200304" → ano = 2003, trimestre = 4)
+DadosPoupanca <- DadosPoupanca %>%
+  mutate(
+    Ano = substr(Trimestre_Cod, 1, 4),
+    Trimestre = as.numeric(substr(Trimestre_Cod, 5, 6))
+  )
+
+DadosPoupanca$Ano <- as.numeric(DadosPoupanca$Ano)
+
+# Criar data no formato "YYYY-QQ"
+DadosPoupanca <- DadosPoupanca %>%
+  mutate(
+    Data = case_when(
+      Trimestre >= 1 & Trimestre <= 4 ~ yearquarter(paste0(Ano, " Q", Trimestre)),
+      TRUE ~ NA  # Caso o trimestre seja inválido, retorna NA
+    )
+  )
+
+# Selecionar colunas relevantes
+DadosPoupanca <- DadosPoupanca %>%
+  dplyr::select(Data, Renda, PoupancaB, PIB)
+
+# Filtrar a partir de 2004T1
+DadosPoupanca <- DadosPoupanca %>%
+  filter(Data >= yearquarter("2004 Q1"))
+
+# Ordenar por data
+DadosPoupanca <- DadosPoupanca %>%
+  arrange(Data)
+
+# ----------------------------------------------
+# Calcular as Taxas de Poupança
+# ----------------------------------------------
+DadosPoupanca <- DadosPoupanca %>%
+  mutate(
+    Taxa_Poupanca_Renda = (PoupancaB / Renda)*100,
+    Poupanca = PoupancaB / (1 + vIPCAT/100) # 1) Deflação com IPCAT (IPCA Amplo 433)
+  )
+
+```
+
+## 2.2 Treatment
+
+#### HP filter
+
+```{r}
+# ----------------------------------------------  
+# Aplicar Filtro HP (Dados até 2024T3)
+# ----------------------------------------------
+
+# Criar série temporal (2004Q4 até 2024Q4)
+TxPoupSerie <- ts(
+  DadosPoupanca$Taxa_Poupanca_Renda,
+  start = c(2004, 1), 
+  frequency = 4
+)
+
+# Aplicar filtro HP (lambda = 1600)
+hp_resultado <- mFilter::hpfilter(TxPoupSerie, freq = 1600) #1600 É FUNDAMENTADO NO ARTIGO DE Hodrick–Prescott.
+#Há outros parâmetros (type e drift) na função "hpfilter", mas até então o que importa é isso.
+
+# Criar DataFrame final
+iPoupHP <- data.frame(
+  Data = as.yearqtr(time(TxPoupSerie)),
+  Taxa_Poupanca_Renda = as.numeric(TxPoupSerie),
+  Tendencia_HP = as.numeric(hp_resultado$trend),
+  Ciclo_HP = as.numeric(hp_resultado$cycle)
+)
+
+# ----------------------------------------------
+# Passo 5: Visualização | Tendência
+# ----------------------------------------------
+ggplot(iPoupHP, aes(x = Data)) +
+  geom_line(aes(y = Taxa_Poupanca_Renda, color = "Original"), linewidth = 0.8) +
+  geom_line(aes(y = Tendencia_HP, color = "Tendência HP"), linewidth = 1.2) +
+  labs(
+    title = "Taxa de Poupança com Filtro Hodrick-Prescott (2004Q1 - 2024Q1)",
+    y = "Taxa de Poupança (%)",
+    color = "Legenda"
+  ) +
+  scale_color_manual(values = c("Original" = "#002C5E", "Tendência HP" = "#46B1E1")) +
+  theme_minimal()
+
+#Visualização | Ciclo
+
+ggplot(iPoupHP, aes(x = Data)) +
+  geom_line(aes(y = Taxa_Poupanca_Renda, color = "Original"), linewidth = 0.8) +
+  geom_line(aes(y = Ciclo_HP, color = "Ciclo HP"), linewidth = 1.2) +
+  labs(
+    title = "Taxa de Poupança com Filtro Hodrick-Prescott (2004Q1 - 2024Q1)",
+    y = "Taxa de Poupança (%)",
+    color = "Legenda"
+  ) +
+  scale_color_manual(values = c("Original" = "#002C5E", "Ciclo HP" = "#46B1E1")) +
+  theme_minimal()
+
+
+```
+
+#### Spread
+
+```{r}
+# 1) pacotes que vamos usar
+library(zoo)       # para trabalhar com yearmon / yearqtr
+library(xts)       # para apply.quarterly
+library(dplyr)     # manipulação
+library(lubridate) # para seq de datas
+
+# Suprimir a mensagem do period.apply
+options(xts.message.period.apply.mean = FALSE)
+
+# 2) transforme seus vetores ts mensais em objetos zoo/xts com datas reais
+# supondo que OVER e SWAP já são ts mensais iniciando em 2004‐01
+# Se suas séries ts já têm índice correto, você pode fazer:
+OVER_xts <- as.xts(coredata(OVER),
+                   order.by = seq(as.Date("2004-01-01"),
+                                  by = "1 month",
+                                  length.out = length(OVER)))
+# SWAP_xts <- as.xts(coredata(SWAP),
+#                    order.by = seq(as.Date("2005-01-01"),
+#                                   by = "1 month",
+#                                   length.out = length(SWAP)))
+
+SWAP_xts <- as.xts(SWAP$value, order.by = SWAP$date)
+
+# 3) Agregar para trimestre
+
+# Determinar quais são os meses finais de cada trimestre
+meses_finais_OVER <- which(lubridate::month(zoo::index(OVER_xts)) %in% c(3, 6, 9, 12))
+meses_finais_SWAP <- which(lubridate::month(zoo::index(SWAP_xts)) %in% c(3, 6, 9, 12))
+
+OVER_trimestral <- OVER_xts[meses_finais_OVER]
+SWAP_trimestral <- SWAP_xts[meses_finais_SWAP]
+
+# Transformar em frequência trimestral correta
+
+selic_qt <- period.apply(OVER_trimestral, endpoints(OVER_trimestral, on="quarters"), mean)
+swap_qt <- period.apply(SWAP_trimestral, endpoints(SWAP_trimestral, on="quarters"), mean)
+
+# 4) monte ts trimestrais para as suas proxies de LP
+#  – para o IDkA10
+idka_ts <- ts(IDKA$Taxa_Trimestral,
+              start = c(IDKA$Ano[1], as.integer(IDKA$Trimestre[1])),
+              frequency = 4)
+
+#  – para a taxa de poupança, em decimal
+
+poup_ts <- ts(iPoupHP$Tendencia_HP / 100,
+              start = c(year(iPoupHP$Data[1]),
+                        quarter(iPoupHP$Data[1])),
+              frequency = 4)
+
+
+# 5) junte tudo num só objeto, usando apenas o período em que todas se sobrepõem
+all4 <- ts.union(
+  idka   = idka_ts,
+  poup   = poup_ts,
+  selic  = ts(coredata(selic_qt)/100,
+              start = start(idka_ts),
+              frequency = 4),
+  swap   = ts(coredata(swap_qt)/100,
+              start = start(idka_ts),
+              frequency = 4)
+)
+
+# 6) Defina a data de corte para Q4 de 2024
+data_corte <- as.yearqtr("2024 Q4")
+
+# 7) Filtrar all4 para incluir apenas os dados até Q4 de 2024
+#all4 <- all4[all4 <= data_corte]
+
+# 8) calcule os quatro spreads
+S1_IDKAOVER <- log( (1 + all4[,"idka"]) / (1 + all4[,"selic"]) )
+S2_POUPOVER <- log( (1 + all4[,"poup"]) / (1 + all4[,"selic"]) )
+S3_IDKASWAP <- log( (1 + all4[,"idka"]) / (1 + all4[,"swap"]) )
+S4_POUPSWAP <- log( (1 + all4[,"poup"]) / (1 + all4[,"swap"]) )
+
+# 9) transforme de volta em ts e veja
+S1_IDKAOVER <- ts(S1_IDKAOVER,
+                   start = start(all4),
+                   frequency = 4)
+S2_POUPOVER <- ts(S2_POUPOVER,
+                   start = start(all4),
+                   frequency = 4)
+S3_IDKASWAP <- ts(S3_IDKASWAP,
+                   start = start(all4),
+                   frequency = 4)
+S4_POUPSWAP <- ts(S4_POUPSWAP,
+                   start = start(all4),
+                   frequency = 4)
+
+# Exemplo de plot rápido
+ts.plot(S1_IDKAOVER, S2_POUPOVER,
+        col = c("#002C5E","#46B1E1"),
+        main = "Spreads (IDkA10 vs Selic) e (Poup vs Selic)",
+        ylab = "Ln((1+LP)/(1+CP))",
+        gpars = list(lwd = 2))
+legend("topleft",
+       legend = c("IDkA10−Selic","TaxaPoup−Selic"),
+       col = c("#002C5E","#46B1E1"), lwd = 2)
+
+```
+
+### All series
+
+Deflacionamento, rebasing de índice, transformação logarítimica e conversão trimestral 
+
+START = 2004, TO TEST H2 and H3:
+
+H1 = Savings and credit are independet (limited analysis because is considered just total credit)
+H2 = Artificial monetary growth causes spread) AND 
+H3 = (growth of spread and monetary base causes industry variations)
+
+Funções básicas
+
+```{r}
+library(dplyr)
+library(zoo)
+library(lubridate)
+library(tseries)
+
+#====================================================
+# FUNÇÕES AUXILIARES 
+#====================================================
+
+# Função para acumular um índice de preços a partir das variações mensais
+acumular_indice <- function(variacao_mensal_ts) {
+  # Verifica se é um objeto ts
+  if (!is.ts(variacao_mensal_ts)) {
+    stop("A entrada deve ser um objeto ts (time series).")
+  }
+  
+  # Converte a variação percentual para fator de multiplicação (ex: 0.76% -> 1.0076)
+  fatores <- 1 + variacao_mensal_ts / 100
+  
+  # Calcula o índice acumulado usando cumprod (produto cumulativo)
+  # Define a base 100 para o primeiro período
+  indice_acumulado_valores <- 100 * cumprod(c(1, fatores[-1])) 
+  
+  # Cria um novo objeto ts com os valores acumulados e as mesmas propriedades de tempo
+  indice_acumulado_ts <- ts(indice_acumulado_valores, 
+                            start = start(variacao_mensal_ts), 
+                            frequency = frequency(variacao_mensal_ts))
+  
+  return(indice_acumulado_ts)
+}
+
+# --- Crie os índices acumulados PRIMEIRO ---
+# Supondo que IPCA, IPCAL, IPCACredit sejam os objetos ts com as variações mensais
+
+IPCA_idx <- acumular_indice(IPCA)
+IPCAL_idx <- acumular_indice(IPCAL)
+IPCACredit_idx <- acumular_indice(IPCACredit)
+
+
+# Função aprimorada para deflacionar uma série monetária usando o índice de preços ACUMULADO apropriado
+deflacionar_serie <- function(serie_nominal, nome_serie) {
+  # Determinar o tamanho da série
+  n <- length(serie_nominal)
+  
+  # Selecionar o índice de preços ACUMULADO apropriado com base no nome da série
+  if (nome_serie %in% c("CREDL", "CREDD")) {
+    indice_precos_acumulado <- IPCACredit_idx
+    if (n != length(IPCACredit_idx)) { # Compara com o tamanho do índice acumulado
+       warning(paste("Alerta: A série", nome_serie, "tem", n, "observações, mas o IPCACredit_idx tem", length(IPCACredit_idx), "observações."))
+    }
+  } else if (nome_serie == "CREDT") {
+    indice_precos_acumulado <- IPCA_idx
+     if (n != length(IPCA_idx)) {
+       warning(paste("Alerta: A série", nome_serie, "tem", n, "observações, mas o IPCA_idx tem", length(IPCA_idx), "observações."))
+    }
+  } else if (nome_serie %in% c("M1", "M2", "DV")) {
+    indice_precos_acumulado <- IPCAL_idx
+     if (n != length(IPCAL_idx)) {
+       warning(paste("Alerta: A série", nome_serie, "tem", n, "observações, mas o IPCAL_idx tem", length(IPCAL_idx), "observações."))
+    }
+  } else {
+    stop(paste("Série", nome_serie, "não reconhecida. Use uma das seguintes: CREDL, CREDD, CREDT, M1, M2, DV"))
+  }
+  
+  # Verificar se os tamanhos são compatíveis ANTES de tentar deflacionar
+  if (length(indice_precos_acumulado) != n) {
+    stop(paste("Erro fatal: O tamanho da série nominal", nome_serie, "(", n, ") não corresponde ao tamanho do índice de preços acumulado selecionado (", length(indice_precos_acumulado), "). Verifique os períodos das séries."))
+  }
+  
+  # Deflacionar: dividir a série nominal pelo índice de preços acumulado
+  # Normalizar o índice para que o valor no primeiro período seja 1 (ou 100 se preferir)
+  # Dividir pelo índice / índice[1] é o mesmo que multiplicar por índice[1] / índice
+  serie_real <- serie_nominal / (indice_precos_acumulado / indice_precos_acumulado[1]) 
+  
+  # Preservar as propriedades de time series
+  serie_real <- ts(serie_real, start = start(serie_nominal), frequency = frequency(serie_nominal))
+  
+  return(serie_real)
+}
+
+# Função para converter série mensal para trimestral usando média ou último valor
+# converter_para_trimestre <- function(serie, metodo = "ultimo") {
+#   if (metodo == "media") {
+#     # Método 1: Média dos três meses
+#     serie_trim <- aggregate(serie, nfrequency = 4, FUN = mean)
+#   } else if (metodo == "ultimo") {
+#     # Método 2: Usar o último mês de cada trimestre (mar, jun, set, dez)
+#     meses_finais <- which(cycle(serie) %in% c(3, 6, 9, 12))
+#     serie_trim <- ts(serie[meses_finais], 
+#                     start = c(year(time(serie)[1]), quarter(time(serie)[1])), 
+#                     frequency = 4)
+#   }
+#   return(serie_trim)
+# }
+
+converter_para_trimestre <- function(serie, metodo = "ultimo") {
+  if (metodo == "media") {
+    # Método 1: Média dos três meses
+    serie_trim <- aggregate(serie, nfrequency = 4, FUN = mean)
+  } else if (metodo == "ultimo") {
+    # Método 2: Usar o último mês de cada trimestre (mar, jun, set, dez)
+    meses_finais <- which(cycle(serie) %in% c(3, 6, 9, 12))
+    
+    # Extrair ano e trimestre do primeiro ponto de tempo
+    t1 <- time(serie)[1]
+    ano_inicial <- trunc(t1)  # Parte inteira é o ano
+    mes_inicial <- round((t1 %% 1) * frequency(serie)) + 1  # Parte decimal convertida para mês
+    trimestre_inicial <- ceiling(mes_inicial / 3)  # Converter mês para trimestre
+    
+    serie_trim <- ts(serie[meses_finais], 
+                    start = c(ano_inicial, trimestre_inicial), 
+                    frequency = 4)
+  }
+  return(serie_trim)
+}
+
+# Função para fazer rebasing de uma série (definir um período específico como 100)
+fazer_rebasing <- function(serie, ano_base = 2003, periodo_base = 12) {
+  # Localizar o valor no período base
+  if (frequency(serie) == 12) {
+    # Série mensal
+    valor_base <- window(serie, start = c(ano_base, periodo_base), 
+                         end = c(ano_base, periodo_base))[1]
+  } else if (frequency(serie) == 4) {
+    # Série trimestral - usamos o 4º trimestre de 2003
+    valor_base <- window(serie, start = c(ano_base, 4), 
+                         end = c(ano_base, 4))[1]
+  }
+  
+  # Normalizar a série para que o período base seja igual a 100
+  serie_rebased <- 100 * (serie / valor_base)
+  return(serie_rebased)
+}
+
+#====================================================
+# PROCESSAMENTO DAS SÉRIES 
+#====================================================
+
+# 1. SÉRIES MONETÁRIAS (M1, M2, DV)
+#====================================================
+
+# Deflacionar, converter para trimestre usando média e aplicar log
+M1_processado <- M1 %>%
+  deflacionar_serie(nome_serie = "M1") %>%
+  converter_para_trimestre(metodo = "media") %>%
+  log()
+
+M2_processado <- M2 %>%
+  deflacionar_serie(nome_serie = "M2") %>%
+  converter_para_trimestre(metodo = "media") %>%
+  log()
+
+DV_processado <- DV %>%
+  deflacionar_serie(nome_serie = "DV") %>%
+  converter_para_trimestre(metodo = "media") %>%
+  log()
+
+# 2. SPREADS (já estão em formato trimestral)
+#====================================================
+# Não precisam de tratamento
+S1_processado <- S1_IDKAOVER_REAL
+S2_processado <- S2_POUPOVER_REAL
+S3_processado <- S3_IDKASWAP_REAL
+S4_processado <- S4_POUPSWAP_REAL
+
+# 3. SÉRIES DE CRÉDITO (CREDT, CREDL, CREDD)
+#====================================================
+
+# Deflacionar e converter para trimestral (saldo final)
+CREDT_processado <- CREDT %>%
+  deflacionar_serie(nome_serie = "CREDT") %>%
+  converter_para_trimestre(metodo = "ultimo")
+
+CREDL_processado <- CREDL %>%
+  deflacionar_serie(nome_serie = "CREDL") %>%
+  converter_para_trimestre(metodo = "ultimo")
+
+CREDD_processado <- CREDD %>%
+  deflacionar_serie(nome_serie = "CREDD") %>%
+  converter_para_trimestre(metodo = "ultimo")
+
+# 4. SÉRIES DE PRODUTO (IBCBR, IBCBR_Agro, IBCBR_Serv, IBCBR_Ind)
+#====================================================
+# Obter valor de dez/2003 para rebasing
+# Supondo que as séries começam em jan/2004, precisamos obter esse valor
+# Alternativa: usar o primeiro valor da série e escalonar
+
+# Converter para trimestre (último valor) e fazer rebasing
+IBCBR_processado <- IBCBR %>%
+  converter_para_trimestre(metodo = "ultimo") %>%
+  fazer_rebasing(ano_base = 2003, periodo_base = 4)  # 4º trimestre de 2003
+
+IBCBR_Agro_processado <- IBCBR_Agro %>%
+  converter_para_trimestre(metodo = "ultimo") %>%
+  fazer_rebasing(ano_base = 2003, periodo_base = 4)
+
+IBCBR_Serv_processado <- IBCBR_Serv %>%
+  converter_para_trimestre(metodo = "ultimo") %>%
+  fazer_rebasing(ano_base = 2003, periodo_base = 4)
+
+IBCBR_Ind_processado <- IBCBR_Ind %>%
+  converter_para_trimestre(metodo = "ultimo") %>%
+  fazer_rebasing(ano_base = 2003, periodo_base = 4)
+
+IBCBR_ExAgro <- IBCBR_ExAgro %>%
+  converter_para_trimestre(metodo = "ultimo") %>%
+  fazer_rebasing(ano_base = 2003, periodo_base = 4)
+
+# 5. INDUSTRIAL RATIOS 
+#====================================================
+# Converter para trimestre e rebasing
+# Nota: Para os índices já calculados (IND1-IND7) não é necessário rebasing
+# pois são logaritmos de razões
+
+IND1_processado <- IND1 %>% 
+  converter_para_trimestre(metodo = "ultimo")
+
+IND2_processado <- IND2 %>% 
+  converter_para_trimestre(metodo = "ultimo")
+
+IND3_processado <- IND3 %>% 
+  converter_para_trimestre(metodo = "ultimo")
+
+IND4_processado <- IND4 %>% 
+  converter_para_trimestre(metodo = "ultimo")
+
+IND5_processado <- IND5 %>% 
+  converter_para_trimestre(metodo = "ultimo")
+
+IND6_processado <- IND6 %>% 
+  converter_para_trimestre(metodo = "ultimo")
+
+IND7_processado <- IND7 %>% 
+  converter_para_trimestre(metodo = "ultimo")
+
+# Eliminando 4Q2003
+IND1_processado <- IND1_processado[-1]
+IND2_processado <- IND2_processado[-1]
+IND3_processado <- IND3_processado[-1]
+IND4_processado <- IND4_processado[-1]
+IND5_processado <- IND5_processado[-1]
+IND6_processado <- IND6_processado[-1]
+IND7_processado <- IND7_processado[-1]
+
+# Transformando para ts
+IND1_processado <- ts(IND1_processado, start = start(M1_processado), frequency = frequency(M1_processado))
+IND2_processado <- ts(IND2_processado, start = start(M1_processado), frequency = frequency(M1_processado))
+IND3_processado <- ts(IND3_processado, start = start(M1_processado), frequency = frequency(M1_processado))
+IND4_processado <- ts(IND4_processado, start = start(M1_processado), frequency = frequency(M1_processado))
+IND5_processado <- ts(IND5_processado, start = start(M1_processado), frequency = frequency(M1_processado))
+IND6_processado <- ts(IND6_processado, start = start(M1_processado), frequency = frequency(M1_processado))
+IND7_processado <- ts(IND7_processado, start = start(M1_processado), frequency = frequency(M1_processado))
+
+
+IIPG_processado <- IIPG %>% 
+  converter_para_trimestre(metodo = "ultimo")
+IIPG_processado <- window(IIPG_processado, start = c(2004,1)) 
+
+#Na H3 (Exp. Monetária ➡ Indústria/Produção) será utilizadas as razões do Produto e não as séries originais do IBCBR
+
+PIB_processado <- PIB %>% 
+  converter_para_trimestre(metodo = "ultimo") 
+PIB_processado <- window(PIB_processado, start = c(2004,1)) 
+
+#UCAP <- window(UCAP, start = c(2004,1))
+PIBExAgro_processado <- PIB_ExAgro %>% 
+  converter_para_trimestre(metodo = "ultimo")
+PIBExAgro_processado <- window(PIBExAgro_processado, start = c(2004,1)) 
+
+PIBAgro_processado <- PIB_Agro %>% 
+  converter_para_trimestre(metodo = "ultimo")
+PIBAgro_processado <- window(PIBAgro_processado, start = c(2004,1)) 
+
+PIBInd_processado <- PIB_Ind %>% 
+  converter_para_trimestre(metodo = "ultimo")
+PIBInd_processado <- window(PIBInd_processado, start = c(2004,1)) 
+
+PIBServ_processado <- PIB_Serv %>% 
+  converter_para_trimestre(metodo = "ultimo")
+PIBServ_processado <- window(PIBServ_processado, start = c(2004,1)) 
+
+# UCAP já está em formato trimestral
+UCAP_processado <- UCAP
+
+# 6. IPCA (sem tratamento necessário)
+#====================================================
+# IPCA permanece mensal
+# IPCAT já está em frequência trimestral
+# IPCAL permanece mensal
+
+# 7. SAVINGS
+#====================================================
+# A série DadosPoupanca$Poupanca já está em formato trimestral e está deflacionada pelo IPCAT
+
+# Criar um objeto time series para poupança (se ainda não for)
+Poupanca_ts <- ts(DadosPoupanca$Poupanca, 
+                 start = c(2004, 1), frequency = 4)  # Supondo que começa em 2004-Q1
+
+
+# Série de Poupança original começando em 2004
+Poup2004 <- ts(DadosPoupanca$Poupanca, 
+               start = c(2004, 1), frequency = 4)
+
+# Encontrar o índice para o início de 2007
+inicio_2007 <- which(time(Poup2004) >= 2007)[1]
+
+# Criar série de Poupança começando em 2007
+Poup2007 <- Poup2004[inicio_2007:length(Poup2004)]
+
+
+# Criar série de Poupança começando em 2007, mantendo as propriedades de série temporal
+Poup2007 <- ts(Poup2004[inicio_2007:length(Poup2004)], 
+               start = c(2007, 1), frequency = 4)
+
+#====================================================
+# VERIFICAÇÃO DOS RESULTADOS
+#====================================================
+
+# Verificar algumas séries processadas
+summary(M1_processado)
+summary(CREDT_processado)
+summary(IBCBR_processado)
+summary(IND1_processado)
+summary(Poupanca_ts)
+
+# Criar uma lista com todas as séries processadas para fácil acesso
+series_test <- list(
+  M1 = M1_processado,
+  M2 = M2_processado,
+  DV = DV_processado,
+  S1_IDKAOVER = S1_processado,
+  S2_POUPOVER = S2_processado,
+  S3_IDKASWAP = S3_processado,
+  S4_POUPSWAP = S4_processado,
+  CREDT = CREDT_processado,
+  CREDL = CREDL_processado,
+  CREDD = CREDD_processado,
+  IND1 = IND1_processado,
+  IND2 = IND2_processado,
+  IND3 = IND3_processado,
+  IND4 = IND4_processado,
+  IND5 = IND5_processado,
+  IND6 = IND6_processado,
+  IND7 = IND7_processado,
+  IIPG = IIPG_processado,
+  PIB = PIB_processado,
+  PIB_ExAgro = PIBExAgro_processado,
+  PIB_Agro = PIBAgro_processado,
+  PIB_Ind = PIBInd_processado,
+  PIB_Serv = PIBServ_processado,
+  UCAP = UCAP_processado,
+  Poup2004 = Poup2004,
+  Poup2007 = Poup2007,
+  FFR = ffr
+)
+  
+endo <- do.call(cbind, series_test)
+exo <- do.call(ffr)
+```
+
+Calculando os spreads reais
+
+```{r}
+# CÓDIGO DO SPREAD - VERSÃO CORRIGIDA COM TAXAS REAIS
+# Usando as funções já existentes
+
+#--------------------
+
+# 1) pacotes que vamos usar
+library(zoo)       # para trabalhar com yearmon / yearqtr
+library(xts)       # para apply.quarterly
+library(dplyr)     # manipulação
+library(lubridate) # para seq de datas
+library(tseries)
+
+# Suprimir a mensagem do period.apply
+options(xts.message.period.apply.mean = FALSE)
+
+#====================================================
+# FUNÇÕES AUXILIARES (já existentes no código original)
+#====================================================
+
+# Função para acumular um índice de preços a partir das variações mensais
+acumular_indice <- function(variacao_mensal_ts) {
+  if (!is.ts(variacao_mensal_ts)) {
+    stop("A entrada deve ser um objeto ts (time series).")
+  }
+  
+  fatores <- 1 + variacao_mensal_ts / 100
+  indice_acumulado_valores <- 100 * cumprod(c(1, fatores[-1])) 
+  
+  indice_acumulado_ts <- ts(indice_acumulado_valores, 
+                            start = start(variacao_mensal_ts), 
+                            frequency = frequency(variacao_mensal_ts))
+  
+  return(indice_acumulado_ts)
+}
+
+# Função aprimorada para deflacionar uma série monetária usando o índice de preços ACUMULADO apropriado
+deflacionar_serie <- function(serie_nominal, nome_serie) {
+  n <- length(serie_nominal)
+  
+  if (nome_serie %in% c("CREDL", "CREDD")) {
+    indice_precos_acumulado <- IPCACredit_idx
+    if (n != length(IPCACredit_idx)) {
+       warning(paste("Alerta: A série", nome_serie, "tem", n, "observações, mas o IPCACredit_idx tem", length(IPCACredit_idx), "observações."))
+    }
+  } else if (nome_serie == "CREDT") {
+    indice_precos_acumulado <- IPCA_idx
+     if (n != length(IPCA_idx)) {
+       warning(paste("Alerta: A série", nome_serie, "tem", n, "observações, mas o IPCA_idx tem", length(IPCA_idx), "observações."))
+    }
+  } else if (nome_serie %in% c("M1", "M2", "DV")) {
+    indice_precos_acumulado <- IPCAL_idx
+     if (n != length(IPCAL_idx)) {
+       warning(paste("Alerta: A série", nome_serie, "tem", n, "observações, mas o IPCAL_idx tem", length(IPCAL_idx), "observações."))
+    }
+  } else {
+    stop(paste("Série", nome_serie, "não reconhecida. Use uma das seguintes: CREDL, CREDD, CREDT, M1, M2, DV"))
+  }
+  
+  if (length(indice_precos_acumulado) != n) {
+    stop(paste("Erro fatal: O tamanho da série nominal", nome_serie, "(", n, ") não corresponde ao tamanho do índice de preços acumulado selecionado (", length(indice_precos_acumulado), "). Verifique os períodos das séries."))
+  }
+  
+  serie_real <- serie_nominal / (indice_precos_acumulado / indice_precos_acumulado[1]) 
+  serie_real <- ts(serie_real, start = start(serie_nominal), frequency = frequency(serie_nominal))
+  
+  return(serie_real)
+}
+
+# Função CORRIGIDA para converter série mensal para trimestral
+converter_para_trimestre <- function(serie, metodo = "ultimo") {
+  if (!is.ts(serie)) {
+    stop("A entrada deve ser um objeto ts (time series).")
+  }
+  
+  if (length(serie) == 0) {
+    stop("A série está vazia.")
+  }
+  
+  if (metodo == "media") {
+    serie_trim <- aggregate(serie, nfrequency = 4, FUN = mean)
+  } else if (metodo == "ultimo") {
+    # Identificar meses finais de trimestre (3, 6, 9, 12)
+    ciclos <- cycle(serie)
+    meses_finais <- which(ciclos %in% c(3, 6, 9, 12))
+    
+    # Verificar se há observações suficientes
+    if (length(meses_finais) == 0) {
+      stop("Não há observações nos meses finais de trimestre (3, 6, 9, 12).")
+    }
+    
+    # Calcular início da série trimestral
+    tempo_serie <- time(serie)
+    primeiro_tempo <- tempo_serie[meses_finais[1]]
+    ano_inicial <- floor(primeiro_tempo)
+    mes_inicial <- round((primeiro_tempo - ano_inicial) * 12) + 1
+    trimestre_inicial <- ceiling(mes_inicial / 3)
+    
+    # Criar série trimestral
+    valores_trimestrais <- as.numeric(serie[meses_finais])
+    
+    # Verificar se temos valores válidos
+    if (length(valores_trimestrais) == 0) {
+      stop("Não há valores válidos para criar a série trimestral.")
+    }
+    
+    serie_trim <- ts(valores_trimestrais, 
+                    start = c(ano_inicial, trimestre_inicial), 
+                    frequency = 4)
+  } else {
+    stop("Método deve ser 'media' ou 'ultimo'.")
+  }
+  
+  return(serie_trim)
+}
+
+# Função para fazer rebasing de uma série (definir um período específico como 100)
+fazer_rebasing <- function(serie, ano_base = 2003, periodo_base = 12) {
+  if (frequency(serie) == 12) {
+    valor_base <- window(serie, start = c(ano_base, periodo_base), 
+                         end = c(ano_base, periodo_base))[1]
+  } else if (frequency(serie) == 4) {
+    valor_base <- window(serie, start = c(ano_base, 4), 
+                         end = c(ano_base, 4))[1]
+  }
+  
+  serie_rebased <- 100 * (serie / valor_base)
+  return(serie_rebased)
+}
+
+#====================================================
+# PREPARAÇÃO DOS ÍNDICES DE PREÇOS
+#====================================================
+
+# Criar os índices acumulados PRIMEIRO
+# CORREÇÃO: Usar IPCAL para deflacionar taxas de juros conforme especificado
+IPCAL_idx <- acumular_indice(IPCAL)
+
+#====================================================
+# PROCESSAMENTO DAS TAXAS DE JUROS
+#====================================================
+
+# Função CORRIGIDA para deflacionar taxas de juros usando IPCAL
+deflacionar_taxa_juros <- function(taxa_nominal_ts) {
+  if (!is.ts(taxa_nominal_ts)) {
+    stop("A entrada deve ser um objeto ts (time series).")
+  }
+  
+  n <- length(taxa_nominal_ts)
+  indice_precos_acumulado <- IPCAL_idx
+  
+  if (length(indice_precos_acumulado) != n) {
+    # Alinhar as séries pelo menor período
+    min_length <- min(length(taxa_nominal_ts), length(indice_precos_acumulado))
+    taxa_nominal_ts <- window(taxa_nominal_ts, end = time(taxa_nominal_ts)[min_length])
+    indice_precos_acumulado <- window(indice_precos_acumulado, end = time(indice_precos_acumulado)[min_length])
+    
+    warning(paste("Séries alinhadas para", min_length, "observações."))
+  }
+  
+  # Converter taxa para decimal
+  taxa_decimal <- taxa_nominal_ts / 100
+  
+  # Calcular inflação mensal a partir do índice acumulado
+  inflacao_mensal <- c(NA, diff(indice_precos_acumulado) / indice_precos_acumulado[-length(indice_precos_acumulado)])
+  inflacao_mensal[1] <- 0  # Primeira observação
+  
+  # Fórmula de Fisher: (1 + r_real) = (1 + r_nominal) / (1 + inflação)
+  taxa_real_decimal <- ((1 + taxa_decimal) / (1 + inflacao_mensal)) - 1
+  
+  # Retornar em percentual
+  taxa_real <- taxa_real_decimal * 100
+  taxa_real <- ts(taxa_real, start = start(taxa_nominal_ts), frequency = frequency(taxa_nominal_ts))
+  
+  return(taxa_real)
+}
+
+#====================================================
+# PROCESSAMENTO PRINCIPAL
+#====================================================
+
+# Verificar se all4 existe e tem dados
+if (!exists("all4")) {
+  stop("Objeto 'all4' não encontrado. Certifique-se de que foi criado anteriormente.")
+}
+
+cat("Estrutura de all4:\n")
+print(str(all4))
+cat("Dimensões de all4:", dim(all4), "\n")
+cat("Período de all4:", start(all4), "a", end(all4), "\n")
+
+# Extrair as séries de all4 (assumindo que estão em formato decimal)
+selic_series <- all4[, "selic"]
+swap_series <- all4[, "swap"]
+
+# Converter para percentual se necessário (as séries parecem estar em formato decimal)
+selic_percentual <- selic_series * 100
+swap_percentual <- swap_series * 100
+
+# Criar objetos ts explícitos
+selic_ts <- ts(as.numeric(selic_percentual), 
+               start = start(all4), 
+               frequency = frequency(all4))
+
+swap_ts <- ts(as.numeric(swap_percentual), 
+              start = start(all4), 
+              frequency = frequency(all4))
+
+# Verificar se as séries têm dados
+cat("Comprimento da série SELIC:", length(selic_ts), "\n")
+cat("Comprimento da série SWAP:", length(swap_ts), "\n")
+cat("Comprimento do IPCAL_idx:", length(IPCAL_idx), "\n")
+
+# Processar taxas reais
+if (length(selic_ts) > 0 && length(IPCAL_idx) > 0) {
+  selic_real <- deflacionar_taxa_juros(selic_ts)
+  cat("Taxa SELIC real calculada com sucesso.\n")
+} else {
+  stop("Erro: Séries SELIC ou IPCAL estão vazias.")
+}
+
+if (length(swap_ts) > 0 && length(IPCAL_idx) > 0) {
+  swap_real <- deflacionar_taxa_juros(swap_ts)
+  cat("Taxa SWAP real calculada com sucesso.\n")
+} else {
+  stop("Erro: Séries SWAP ou IPCAL estão vazias.")
+}
+
+# Converter para trimestral (se as séries forem mensais)
+if (frequency(selic_real) == 12) {
+  selic_real_trim <- converter_para_trimestre(selic_real, metodo = "ultimo")
+  swap_real_trim <- converter_para_trimestre(swap_real, metodo = "ultimo")
+} else {
+  # Se já forem trimestrais, usar como estão
+  selic_real_trim <- selic_real
+  swap_real_trim <- swap_real
+}
+
+# Criar novo all4 com taxas reais
+all4_real <- ts.union(
+  idka        = all4[,"idka"],
+  poup        = all4[,"poup"],
+  selic_real  = selic_real_trim / 100,  # Converter para decimal
+  swap_real   = swap_real_trim / 100    # Converter para decimal
+)
+
+# Calcular os spreads em termos reais
+S1_IDKAOVER_REAL <- log( (1 + all4_real[,"idka"]) / (1 + all4_real[,"selic_real"]) )
+S2_POUPOVER_REAL <- log( (1 + all4_real[,"poup"]) / (1 + all4_real[,"selic_real"]) )
+S3_IDKASWAP_REAL <- log( (1 + all4_real[,"idka"]) / (1 + all4_real[,"swap_real"]) )
+S4_POUPSWAP_REAL <- log( (1 + all4_real[,"poup"]) / (1 + all4_real[,"swap_real"]) )
+
+# Transformar de volta em ts
+S1_IDKAOVER_REAL <- ts(S1_IDKAOVER_REAL, start = start(all4_real), frequency = 4)
+S2_POUPOVER_REAL <- ts(S2_POUPOVER_REAL, start = start(all4_real), frequency = 4)
+S3_IDKASWAP_REAL <- ts(S3_IDKASWAP_REAL, start = start(all4_real), frequency = 4)
+S4_POUPSWAP_REAL <- ts(S4_POUPSWAP_REAL, start = start(all4_real), frequency = 4)
+
+#====================================================
+# GRÁFICOS E ESTATÍSTICAS
+#====================================================
+
+# Plot dos spreads
+ts.plot(S1_IDKAOVER_REAL, S2_POUPOVER_REAL,
+        col = c("#002C5E","#46B1E1"),
+        main = "Spreads em Termos Reais (IDkA10 vs Selic Real) e (Poup vs Selic Real)",
+        ylab = "Ln((1+LP)/(1+CP_real))",
+        gpars = list(lwd = 2))
+legend("topleft",
+       legend = c("IDkA10−Selic Real","TaxaPoup−Selic Real"),
+       col = c("#002C5E","#46B1E1"), lwd = 2)
+
+# Plot adicional comparando spreads com SWAP
+ts.plot(S3_IDKASWAP_REAL, S4_POUPSWAP_REAL,
+        col = c("#8B0000","#FF6347"),
+        main = "Spreads em Termos Reais (IDkA10 vs SWAP Real) e (Poup vs SWAP Real)",
+        ylab = "Ln((1+LP)/(1+CP_real))",
+        gpars = list(lwd = 2))
+legend("topleft",
+       legend = c("IDkA10−SWAP Real","TaxaPoup−SWAP Real"),
+       col = c("#8B0000","#FF6347"), lwd = 2)
+
+#====================================================
+# VERIFICAÇÕES E DIAGNÓSTICOS
+#====================================================
+
+cat("=== VERIFICAÇÃO DAS CONVERSÕES ===\n")
+cat("Média SELIC nominal:", round(mean(selic_ts, na.rm = TRUE), 2), "%\n")
+cat("Média SELIC real:", round(mean(selic_real, na.rm = TRUE), 2), "%\n")
+cat("Diferença (nominal - real):", round(mean(selic_ts, na.rm = TRUE) - mean(selic_real, na.rm = TRUE), 2), "p.p.\n")
+
+cat("\n=== ESTATÍSTICAS DOS SPREADS REAIS ===\n")
+cat("S1 (IDkA10-SELIC Real) - Média:", round(mean(S1_IDKAOVER_REAL, na.rm = TRUE), 4), 
+    "Desvio:", round(sd(S1_IDKAOVER_REAL, na.rm = TRUE), 4), "\n")
+cat("S2 (POUP-SELIC Real) - Média:", round(mean(S2_POUPOVER_REAL, na.rm = TRUE), 4), 
+    "Desvio:", round(sd(S2_POUPOVER_REAL, na.rm = TRUE), 4), "\n")
+cat("S3 (IDkA10-SWAP Real) - Média:", round(mean(S3_IDKASWAP_REAL, na.rm = TRUE), 4), 
+    "Desvio:", round(sd(S3_IDKASWAP_REAL, na.rm = TRUE), 4), "\n")
+cat("S4 (POUP-SWAP Real) - Média:", round(mean(S4_POUPSWAP_REAL, na.rm = TRUE), 4), 
+    "Desvio:", round(sd(S4_POUPSWAP_REAL, na.rm = TRUE), 4), "\n")
+
+cat("\n=== INFORMAÇÕES ADICIONAIS ===\n")
+cat("Período final dos spreads:", end(S1_IDKAOVER_REAL), "\n")
+cat("Número de observações:", length(S1_IDKAOVER_REAL), "\n")
+```
+
+#_________
+# 3 🔎 PRE-ANALYSIS
+
+## Visualization
+
+Vector image
+
+```{r}
+# mapeamento das séries para suas legendas
+var_labels <- c(
+  M1           = "M1 (log)",
+  M2           = "M2 (log)",
+  DV           = "DV (log)",
+  S1_IDKAOVER  = "S1_IDKAOVER (log – p.p.)",
+  S2_POUPOVER  = "S2_POUPOVER (log – p.p.)",
+  S3_IDKASWAP  = "S3_IDKASWAP (log – p.p.)",
+  S4_POUPSWAP  = "S4_POUPSWAP (log – p.p.)",
+  CREDT        = "CREDT (R$)",
+  CREDL        = "CREDL (R$)",
+  CREDD        = "CREDD (R$)",
+  IND1         = "IND1 (Índice, dez/2003=100)",
+  IND2         = "IND2 (Índice, dez/2003=100)",
+  IND3         = "IND3 (Índice, dez/2003=100)",
+  IND4         = "IND4 (Índice, dez/2003=100)",
+  IND5         = "IND5 (Índice, dez/2003=100)",
+  IND6         = "IND6 (Índice, dez/2003=100)",
+  IND7         = "IND7 (Índice, dez/2003=100)",
+  IIPG         = "IIPG (Índice, dez/2003=100)",
+  PIB          = "PIB (Índice, dez/2003=100)",
+  PIB_ExAgro   = "PIB_ExAgro (Índice, dez/2003=100)",
+  PIB_Agro     = "PIB_Agro (Índice, dez/2003=100)",
+  PIB_Ind      = "PIB_Ind (Índice, dez/2003=100)",
+  PIB_Serv     = "PIB_Serv (Índice, dez/2003=100)",
+  UCAP         = "UCAP (Índice)",
+  Poup2004     = "Poup2004 (R$)",
+  Poup2007     = "Poup2007 (R$)",
+  FFR          = "FFR (% a.a.)"
+)
+
+# layout
+num_plots <- length(series_test)
+nc        <- 4
+nl        <- ceiling(num_plots / nc)
+
+win.metafile("series_deflacionadas.emf", width = 15, height = 15)
+par(mfrow = c(nl, nc), mar = c(2,4,2,1), oma = c(1,1,1,1))
+
+for (serie_nome in names(series_test)) {
+  serie <- series_test[[serie_nome]]
+  if (is.null(serie) || length(serie)<2) next
+  
+  # escolhe o título baseado no vetor; se não achar, usa o próprio nome
+  titulo <- var_labels[serie_nome]
+  if (is.na(titulo)) titulo <- serie_nome
+  
+  plot(serie,
+       main = titulo,
+       ylab = "",    # aqui você pode trocar por algo genérico ou específico
+       type = "l",
+       col  = "blue",
+       las  = 1)
+  abline(h = serie[1], lty = 2, col = "red")
+}
+
+dev.off()
+
+# aviso de séries faltantes
+missing_series <- names(series_test)[vapply(series_test, is.null, TRUE)]
+if (length(missing_series)>0) {
+  warning("As seguintes séries não foram processadas: ",
+          paste(missing_series, collapse = ", "))
+}
+
+```
+
+#_________
+# 4🌡️ TESTS
+
+## Unit roots
+
+Classificação para Teste de Estacionaridade:
+
+Para testes de Raiz Unitária (ADF, Phillips-Perron - H0: há raiz unitária):
+
+Opção 1: "Nenhum" (sem intercepto, sem tendência)
+
+Quando usar: Se a série visualmente parece flutuar em torno de zero e não tem tendência. O modelo de teste é Δy_t = γ*y_{t-1} + lags(Δy) + ε_t.
+
+Sob a alternativa (estacionariedade), a série é estacionária com média zero.
+
+
+Opção 2: "Intercepto" (ou "constante", "drift")
+
+Quando usar: Se a série visualmente parece flutuar em torno de uma média constante diferente de zero, mas sem uma tendência sistemática de longo prazo. O modelo de teste é Δy_t = α + γ*y_{t-1} + lags(Δy) + ε_t.
+
+Sob a alternativa (estacionariedade), a série é estacionária com média α/(1-γ). Se há raiz unitária (γ=0), α representa o drift.
+
+
+Opção 3: "Tendência" (ou "intercepto e tendência")
+
+Quando usar: Se a série visualmente exibe uma tendência linear clara (subindo ou descendo consistentemente ao longo do tempo). O modelo de teste é Δy_t = α + β*t + γ*y_{t-1} + lags(Δy) + ε_t.
+
+Sob a alternativa (estacionariedade), a série é estacionária em torno de uma tendência determinística (α + β*t).
+
+- A: Parece ter tendência clara (crescente ou decrescente). [TENDÊNCIA DETERMINÍSTICA e INTERCEPTO]
+ 
+- B: Sem tendência clara, mas parece flutuar em torno de uma média não-zero. [INTERCEPTO]
+ 
+- C: Sem tendência clara, parece flutuar em torno de zero (ou a média é visualmente insignificante). #ESTACIONÁRIA: [NONE] 
+ 
+- D: Complexa (possíveis quebras estruturais, volatilidade muito variável – estas podem precisar de mais atenção individual depois).
+
+Lista para fazer os testes
+
+```{r}
+
+series_test <- list(
+  M1 = M1_processado,
+  M2 = M2_processado,
+  DV = DV_processado,
+  S1_IDKAOVER = S1_processado,
+  S2_POUPOVER = S2_processado,
+  S3_IDKASWAP = S3_processado,
+  S4_POUPSWAP = S4_processado,
+  CREDT = CREDT_processado,
+  CREDL = CREDL_processado,
+  CREDD = CREDD_processado,
+  IND1 = IND1_processado,
+  IND2 = IND2_processado,
+  IND3 = IND3_processado,
+  IND4 = IND4_processado,
+  IND5 = IND5_processado,
+  IND6 = IND6_processado,
+  IND7 = IND7_processado,
+  IIPG = IIPG_processado,
+  PIB = PIB_processado,
+  PIB_ExAgro = PIBExAgro_processado,
+  PIB_Agro = PIBAgro_processado,
+  PIB_Ind = PIBInd_processado,
+  PIB_Serv = PIBServ_processado,
+  UCAP = UCAP_processado,
+  Poup2004 = Poup2004,
+  Poup2007 = Poup2007,
+  FFR = ffr
+)
+
+stationary_test <- list(
+  M1 = M1_processado, #B, # D
+  M2 = M2_processado, #B
+  DV = DV_processado, #B, #D
+  S1_IDKAOVER = S1_processado, #B
+  S2_POUPOVER = S2_processado, #B
+  S3_IDKASWAP = S3_processado, #B
+  S4_POUPSWAP = S4_processado, #B
+  CREDT = CREDT_processado,#B
+  CREDL = CREDL_processado,
+  CREDD = CREDD_processado,
+  IND1 = IND1_processado, #B, D
+  IND2 = IND2_processado, #B, D
+  IND3 = IND3_processado, #B, D
+  IND4 = IND4_processado, #B, D
+  IND5 = IND5_processado, #B, D
+  IND6 = IND6_processado, #B, D
+  IND7 = IND7_processado, #B, D
+  IIPG = IIPG_processado, #B, D
+  PIB = PIB_processado, #B, D
+  PIB_ExAgro = PIBExAgro_processado, #B, D
+  PIB_Agro = PIBAgro_processado, #B, D
+  PIB_Ind = PIBInd_processado, #B, D
+  PIB_Serv = PIBServ_processado, #B, D
+  UCAP = UCAP_processado, #B, D
+  Poup2004, #B, D
+  Poup2007, #B, D
+  FFR = ffr #B, #D
+  )
+
+# Classificação das séries
+classificacao_series <- list(
+  M1 = "B", 
+  M2 = "A", 
+  DV = "B", 
+  CREDT = "B", 
+  CREDL = "B", 
+  CREDD = "B",
+  Poup2004 = "B",
+  Poup2007 = "B",
+  S1_IDKAOVER = "B", 
+  S2_POUPOVER = "B", 
+  S3_IDKASWAP = "B", 
+  S4_POUPSWAP = "B", 
+  IND1 = "B", 
+  IND2 = "B", 
+  IND3 = "B", 
+  IND4 = "B", 
+  IND5 = "B", 
+  IND6 = "B", 
+  IND7 = "B", 
+  IIPG = "B", 
+  PIB = "B", 
+  PIB_ExAgro = "B", 
+  PIB_Agro = "B",
+  PIB_Ind = "B", 
+  PIB_Serv = "B", 
+  UCAP = "B", 
+  FFR = "B"
+)
+```
+
+UnitRoots
+
+*Passo 1:* Testar cada uma das séries temporais e determinar a sua ordem de integração (d)
+
+*Passo 2:* Definir a ordem máxima (dmax) de integração do sistema
+
+```{r}
+#------------------  DEPENDÊNCIAS  ------------------#
+library(tseries)     # pp.test
+library(stats)       # kpss.test
+library(fUnitRoots)  # adfTest
+
+#------------------  FORMATAÇÃO DE P-VALOR COM ASTERISCOS  ------------------#
+# invert=FALSE: estrelas para p baixo (ADF, PP)
+# invert=TRUE: estrelas para p alto (KPSS)
+format_pvalue <- function(p, invert = FALSE) {
+  star <- ""
+  if (!invert) {
+    if (is.na(p)) {
+      star <- ""
+    } else if (p < 0.01) {
+      star <- "***"
+    } else if (p < 0.05) {
+      star <- "**"
+    } else if (p < 0.10) {
+      star <- "*"
+    }
+  } else {
+    if (is.na(p)) {
+      star <- ""
+    } else if (p > 0.99) {
+      star <- "***"
+    } else if (p > 0.95) {
+      star <- "**"
+    } else if (p > 0.05) {  # MODIFICAÇÃO: p > 0.05 recebe "*"
+      star <- "*"
+    }
+  }
+  sprintf("%.3f%s", ifelse(is.na(p), NA, p), star)
+}
+
+#------------------  FUNÇÕES DE MAPEAMENTO  ------------------#
+get_adf_type <- function(classe) {
+  if (classe == "A") return("ct")
+  if (classe == "B") return("c")
+  if (classe == "C") return("nc")
+  "c"
+}
+get_kpss_null <- function(classe) {
+  if (classe == "A") return("Trend")
+  if (classe %in% c("B","C")) return("Level")
+  "Level"
+}
+get_pp_type <- function(classe) {
+  if (classe == "A") return("Z(t_alpha)")
+  "Z(alpha)"
+}
+
+#------------------  FUNÇÃO PRINCIPAL  ------------------#
+run_pp_kpss_adf <- function(serie, classe,
+                            lags_adf    = 3,
+                            lshort_pp   = FALSE,
+                            lshort_kpss = FALSE) {
+  
+  adf_type  <- get_adf_type(classe)
+  kpss_null <- get_kpss_null(classe)
+  pp_type   <- get_pp_type(classe)
+  
+  series_list <- list(
+    Nivel = serie,
+    Diff1 = diff(serie, 1),
+    Diff2 = diff(serie, 2)
+  )
+  
+  resultados <- list(ADF = list(), PP = list(), KPSS = list())
+  cat("\n================  RESULTADOS  =================\n")
+  cat("Classificação da série:", classe, "\n\n")
+  
+  # ADF
+  cat("ADF  (adfTest)   H0: unidade raiz\n")
+  for (nm in names(series_list)) {
+    pval <- tryCatch(
+      fUnitRoots::adfTest(series_list[[nm]],
+                          lags = lags_adf,
+                          type = adf_type)@test$p.value,
+      error = function(e) NA
+    )
+    cat(sprintf("  %-6s  p = %s\n",
+                nm, format_pvalue(pval, invert = FALSE)))
+    resultados$ADF[[nm]] <- pval
+  }
+  cat("\n")
+  
+  # PP
+  cat("Phillips–Perron  (pp.test)   H0: unidade raiz\n")
+  for (nm in names(series_list)) {
+    pval <- tryCatch(
+      pp.test(series_list[[nm]],
+              type        = pp_type,
+              alternative = "stationary",
+              lshort      = lshort_pp)$p.value,
+      error = function(e) NA
+    )
+    cat(sprintf("  %-6s  p = %s\n",
+                nm, format_pvalue(pval, invert = FALSE)))
+    resultados$PP[[nm]] <- pval
+  }
+  cat("\n")
+  
+  # KPSS
+  cat(sprintf("KPSS  (kpss.test)   H0: estacionariedade (%s)\n",
+              kpss_null))
+  for (nm in names(series_list)) {
+    pval <- tryCatch(
+      kpss.test(series_list[[nm]],
+                null   = kpss_null,
+                lshort = lshort_kpss)$p.value,
+      error = function(e) NA
+    )
+    cat(sprintf("  %-6s  p = %s\n",
+                nm, format_pvalue(pval, invert = TRUE)))
+    resultados$KPSS[[nm]] <- pval
+  }
+  cat("==============================================\n\n")
+  
+  resultados
+}
+
+#------------------  ORIGINAL USO DOS TESTES  ------------------#
+# classificacao_series
+# resultados_gerais <- lapply(
+#   names(stationary_test),
+#   function(nm) {
+#     run_pp_kpss_adf(stationary_test[[nm]],
+#                     classificacao_series[[nm]])
+#   }
+# )
+# names(resultados_gerais) <- names(stationary_test)
+
+#------------------  NOVO USO DOS TESTES  ------------------#
+resultados_gerais <- lapply(
+  names(series_test),
+  function(nm) {
+    run_pp_kpss_adf(series_test[[nm]],
+                    classificacao_series[[nm]])
+  }
+)
+names(resultados_gerais) <- names(series_test)
+
+
+
+#------------------  ORGANIZANDO OS RESULTADOS  ------------------#
+# Dataframes de p-valores brutos
+df_adf  <- sapply(resultados_gerais, function(x) unlist(x$ADF))
+df_pp   <- sapply(resultados_gerais, function(x) unlist(x$PP))
+df_kpss <- sapply(resultados_gerais, function(x) unlist(x$KPSS))
+
+df_adf  <- as.data.frame(t(df_adf))
+df_pp   <- as.data.frame(t(df_pp))
+df_kpss <- as.data.frame(t(df_kpss))
+rownames(df_adf)  <- rownames(df_pp) <- rownames(df_kpss) <- names(resultados_gerais)
+
+# Dataframes formatados com asteriscos
+df_adf_fmt  <- as.data.frame(
+  lapply(df_adf, function(col) sapply(col, format_pvalue, invert = FALSE)),
+  stringsAsFactors = FALSE
+)
+df_pp_fmt   <- as.data.frame(
+  lapply(df_pp,  function(col) sapply(col, format_pvalue, invert = FALSE)),
+  stringsAsFactors = FALSE
+)
+df_kpss_fmt <- as.data.frame(
+  lapply(df_kpss,function(col) sapply(col, format_pvalue, invert = TRUE)),
+  stringsAsFactors = FALSE
+)
+rownames(df_adf_fmt)  <- rownames(df_pp_fmt) <- rownames(df_kpss_fmt) <- rownames(df_adf)
+
+# Criando colunas de resumo (α = 0.05)
+alpha <- 0.05
+df_resumo <- data.frame(
+  Resumo_Nivel = ifelse(
+    df_adf$Nivel  < alpha &
+    df_pp$Nivel   < alpha &
+    df_kpss$Nivel > alpha,
+    "Estacionaria", "Não estacionaria"
+  ),
+  Resumo_Diff1 = ifelse(
+    df_adf$Diff1  < alpha &
+    df_pp$Diff1   < alpha &
+    df_kpss$Diff1 > alpha,
+    "Estacionaria", "Não estacionaria"
+  ),
+  Resumo_Diff2 = ifelse(
+    df_adf$Diff2  < alpha &
+    df_pp$Diff2   < alpha &
+    df_kpss$Diff2 > alpha,
+    "Estacionaria", "Não estacionaria"
+  ),
+  stringsAsFactors = FALSE
+)
+rownames(df_resumo) <- rownames(df_adf)
+
+# Criando coluna de ordem de integração
+df_ordem <- data.frame(
+  Ordem_Integracao = character(nrow(df_adf)),
+  stringsAsFactors = FALSE
+)
+
+for (i in 1:nrow(df_adf)) {
+  if (df_adf$Nivel[i] < alpha && df_pp$Nivel[i] < alpha && df_kpss$Nivel[i] > alpha) {
+    df_ordem$Ordem_Integracao[i] <- "I(0)"
+  } else if (df_adf$Diff1[i] < alpha && df_pp$Diff1[i] < alpha && df_kpss$Diff1[i] > alpha) {
+    df_ordem$Ordem_Integracao[i] <- "I(1)"
+  } else if (df_adf$Diff2[i] < alpha && df_pp$Diff2[i] < alpha && df_kpss$Diff2[i] > alpha) {
+    df_ordem$Ordem_Integracao[i] <- "I(2)"
+  } else {
+    df_ordem$Ordem_Integracao[i] <- "Não determinada"
+  }
+}
+rownames(df_ordem) <- rownames(df_adf)
+
+# Dataframe final combinando tudo
+unitroot_class <- data.frame(
+  ADF_Nivel   = df_adf_fmt$Nivel,
+  ADF_Diff1   = df_adf_fmt$Diff1,
+  ADF_Diff2   = df_adf_fmt$Diff2,
+  PP_Nivel    = df_pp_fmt$Nivel,
+  PP_Diff1    = df_pp_fmt$Diff1,
+  PP_Diff2    = df_pp_fmt$Diff2,
+  KPSS_Nivel  = df_kpss_fmt$Nivel,
+  KPSS_Diff1  = df_kpss_fmt$Diff1,
+  KPSS_Diff2  = df_kpss_fmt$Diff2,
+ # ADICIONADO
+  row.names = rownames(df_adf)
+)
+
+# Veja o resultado final:
+print(unitroot_class)
+
+```
+
+Order of Integration Criteria: ADF e KPSS
+
+```{r}
+#------------------  (depois de calcular df_adf e df_kpss)  ------------------#
+alpha <- 0.05
+
+#------ função auxilia­r para uma série ------
+ordem_integracao <- function(i){
+  # "Tem raiz unitária?" – se ADF NÃO rejeita (p >= alpha) ou KPSS rejeita estacionariedade (p <= alpha)
+  root_lvl <- (df_adf$Nivel[i] >= alpha) | (df_kpss$Nivel[i] <= alpha)
+  root_D1  <- (df_adf$Diff1[i] >= alpha) | (df_kpss$Diff1[i] <= alpha)
+  root_D2  <- (df_adf$Diff2[i] >= alpha) | (df_kpss$Diff2[i] <= alpha)
+  
+  # Avalia raiz unitária
+  if (root_lvl) {                     # Se tem raiz no nível
+    if (root_D1) {                    # Se ainda tem raiz na 1ª diferença
+      return("I(2)")                  # Tem duas raízes unitárias -> I(2)
+    }
+    return("I(1)")                    # Só no nível -> I(1)
+  } else {
+    return("I(0)")                    # Sem raiz no nível -> I(0)
+  }
+}
+
+#------ aplica às séries ------
+order_vec <- vapply(seq_len(nrow(df_adf)), ordem_integracao, FUN.VALUE = character(1))
+
+#------ trata eventuais indeterminações ------
+if (anyNA(order_vec)){
+  cat("\nLimitação: em", sum(is.na(order_vec)),
+      "série(s) a ordem não pôde ser decidida.\n")
+} else {
+  unitroot_class$ORDER_ADFKPSS <- order_vec
+}
+
+#------ mostra resultado ------
+print(unitroot_class)
+```
+
+## Structural Breaks
+
+ZA Test
+
+```{r}
+library(urca)
+
+# Supondo que series_finais e stationary_test já estejam no seu workspace
+
+res_stat   <- numeric() # Estatística do teste
+res_cv10   <- numeric() # Valor crítico a 10%
+res_cv5    <- numeric() # Valor crítico a 5%
+res_cv1    <- numeric() # Valor crítico a 1%
+res_bp     <- integer() # Breakpoint
+series_out <- character() # Nome da série
+
+for (serie_name in names(series_test)) {
+  cat("========================================\n")
+  cat("Série:", serie_name, "\n")
+  
+  x         <- series_test[[serie_name]]
+  za_result <- ur.za(x, model = "both", lag = NULL)
+  
+  # 1) Extrair a estatística do teste
+  test_statistic <- za_result@teststat
+  
+  # 2) Extrair os valores críticos
+  critical_values <- za_result@cval
+  
+  # 3) Extrair o breakpoint
+  bp <- za_result@bpoint
+  
+  # 4) Imprimir para conferência
+  cat("Test statistic:", formatC(test_statistic, digits = 4), "\n")
+  cat("Critical values (10%, 5%, 1%):", formatC(critical_values, digits = 4), "\n")
+  cat("Break point  :", bp, "\n\n")
+  
+  # 5) Guardar
+  res_stat   <- c(res_stat,   test_statistic)
+  res_cv10   <- c(res_cv10,   critical_values[1])
+  res_cv5    <- c(res_cv5,    critical_values[2])
+  res_cv1    <- c(res_cv1,    critical_values[3])
+  res_bp     <- c(res_bp,     bp)
+  series_out <- c(series_out, serie_name)
+}
+
+# Montar o data.frame final
+ZA <- data.frame(
+  Series     = series_out,
+  Statistic  = res_stat,
+  CV_10pct   = res_cv10,
+  CV_5pct    = res_cv5,
+  CV_1pct    = res_cv1,
+  BreakPoint = res_bp,
+  stringsAsFactors = FALSE
+)
+
+# Adicionar as colunas de resultado
+ZA$ResultadoCV10 <- ZA$Statistic < ZA$CV_10pct
+ZA$ResultadoCV5  <- ZA$Statistic < ZA$CV_5pct
+ZA$ResultadoCV1  <- ZA$Statistic < ZA$CV_1pct
+
+print(ZA)
+```
+
+ZA - Plot of Series With Breaks
+
+```{r}
+library(ggplot2)
+
+# --- 1) Extrai as séries originais como vetores ts ---
+DV_ts    <- series_test[["DV"]]
+CREDL_ts <- series_test[["CREDL"]]
+
+# --- 2) Cria o calendário trimestral para cada série ---
+dates_dv    <- seq(from = as.Date("2004-10-01"), by = "quarter", length.out = length(DV_ts))
+dates_credl <- seq(from = as.Date("2007-01-01"), by = "quarter", length.out = length(CREDL_ts))
+
+# --- 3) Monta os data.frames de plotagem ---
+DVDF <- data.frame(
+  Date  = dates_dv,
+  Value = as.numeric(DV_ts)
+)
+
+CREDLDF <- data.frame(
+  Date  = dates_credl,
+  Value = as.numeric(CREDL_ts)
+)
+
+# --- 4) Extrai o breakpoint de cada série no ZA e converte para data ---
+bp_dv     <- ZA$BreakPoint[ZA$Series == "DV"]
+bp_credl  <- ZA$BreakPoint[ZA$Series == "CREDL"]
+
+bp_date_dv    <- dates_dv[bp_dv]
+bp_date_credl <- dates_credl[bp_credl]
+
+# --- 5) Plota DV com linha vertical no breakpoint ---
+p_dv <- ggplot(DVDF, aes(x = Date, y = Value)) +
+  geom_line(color = "#02023C") +
+  geom_vline(xintercept = bp_date_dv,
+             linetype   = "dashed",
+             color      = "red",
+             size       = 0.8) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%y") +
+  labs(title = "Série DV (4Q2004–4Q2024)",
+       x     = "Data",
+       y     = "DV") +
+  theme_minimal()
+
+# --- 6) Plota CREDL com linha vertical no breakpoint ---
+p_credl <- ggplot(CREDLDF, aes(x = Date, y = Value)) +
+  geom_line(color = "#02023C") +
+  geom_vline(xintercept = bp_date_credl,
+             linetype   = "dashed",
+             color      = "red",
+             size       = 0.8) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%y") +
+  labs(title = "Série CREDL (1Q2007–4Q2024)",
+       x     = "Data",
+       y     = "CREDL") +
+  theme_minimal()
+
+# --- 7) Exibe os dois gráficos ---
+print(p_dv)
+print(p_credl)
+
+```
+
+#_________
+
+## Bivariate VARX 
+
+### Series
+
+Function to generate dummies
+
+```{r}
+# Criar função para gerar dummies sazonais
+criar_dummies_sazonais <- function(serie_ts) {
+  freq <- frequency(serie_ts)
+  start_time <- start(serie_ts)
+  end_time <- end(serie_ts)
+  n_obs <- length(serie_ts)
+  
+  # Criar matriz de dummies sazonais (freq-1 dummies)
+  dummies <- matrix(0, nrow = n_obs, ncol = freq - 1)
+  
+  # Preencher as dummies
+  for (i in 1:(freq - 1)) {
+    indices <- seq(i, n_obs, by = freq)
+    dummies[indices, i] <- 1
+  }
+  
+  # Converter para ts object
+  dummies_ts <- ts(dummies, start = start_time, end = end_time, frequency = freq)
+  colnames(dummies_ts) <- paste0("D", 1:(freq - 1))
+  
+  return(dummies_ts)
+}
+
+# Criar dummies sazonais para as séries
+
+D_Poup2004 <- criar_dummies_sazonais(Poup2004)
+colnames(D_Poup2004) <- paste0("Poup2004_D", 1:ncol(D_Poup2004))
+
+D_Poup2007 <- criar_dummies_sazonais(Poup2007)
+colnames(D_Poup2007) <- paste0("Poup2007_D", 1:ncol(D_Poup2007))
+
+D_UCAP <- criar_dummies_sazonais(UCAP_processado)
+colnames(D_UCAP) <- paste0("UCAP_D", 1:ncol(D_UCAP))
+
+# FUNÇÃO CORRIGIDA: Definir qual dummy usar baseado na variável
+obter_dummies_corrigido <- function(var_nome) {
+  if (var_nome == "Poup2004") {
+    return(D_Poup2004)
+  } else if (var_nome == "Poup2007") {
+    return(D_Poup2007)
+  } else if (var_nome == "UCAP_processado") {
+    return(D_UCAP)
+  } else if (grepl("^S[1-4]_processado", var_nome)) {
+    # Spreads (S1-S4_processado) não levam dummy sazonal
+    return(NULL)
+  } else {
+    return(NULL)
+  }
+}
+
+# FUNÇÃO CORRIGIDA: Obter nome da dummy
+obter_nome_dummy <- function(var_nome) {
+  if (var_nome == "Poup2004") {
+    return("D_Poup2004")
+  } else if (var_nome == "Poup2007") {
+    return("D_Poup2007")
+  } else if (var_nome == "UCAP_processado") {
+    return("D_UCAP")
+  } else {
+    return(NULL)
+  }
+}
+
+# Criar uma lista para armazenar as dummies sazonais (sem DV e CREDL)
+dummies_list <- list(
+  Poup2004 = D_Poup2004,
+  Poup2007 = D_Poup2007,
+  UCAP      = D_UCAP
+)
+
+# Função auxiliar para obter dummies apropriadas baseada no nome da variável
+obter_dummies <- function(var_name) {
+  if (grepl("Poup2004",     var_name)) return(D_Poup2004)
+  if (grepl("Poup2007",     var_name)) return(D_Poup2007)
+  if (grepl("UCAP_processado", var_name)) return(D_UCAP)
+  return(NULL)
+}
+
+```
+
+Series
+
+```{r}
+# Atualizar a matriz de dados endógenos incluindo UCAP_processado
+endo_vars <- cbind(
+  M1_processado, M2_processado, DV_processado,
+  S1_processado, S2_processado, S3_processado, S4_processado,
+  IND1_processado, IND2_processado, IND3_processado, IND4_processado, IND5_processado, IND6_processado, IND7_processado,
+  PIB_processado, PIBAgro_processado, PIBInd_processado, PIBServ_processado, PIBExAgro_processado,
+  Poup2004, Poup2007, CREDT_processado, CREDL_processado, CREDD_processado,
+  UCAP_processado  # Adicionando UCAP_processado
+)
+
+colnames(endo_vars) <- c(
+  "M1_processado", "M2_processado", "DV_processado",
+  "S1_processado", "S2_processado", "S3_processado", "S4_processado",
+  "IND1_processado", "IND2_processado", "IND3_processado", "IND4_processado", "IND5_processado", "IND6_processado", "IND7_processado",
+  "PIB_processado", "PIBAgro_processado", "PIBInd_processado", "PIBServ_processado", "PIBExAgro_processado",
+  "Poup2004", "Poup2007", "CREDT_processado", "CREDL_processado", "CREDD_processado",
+  "UCAP_processado"  # Adicionando UCAP_processado
+)
+
+# Criar dataframe específico para séries que começam em 2007
+endo_vars_2007 <- endo_vars[which(time(endo_vars) >= 2007)[1]:nrow(endo_vars), ]
+
+# 1. Definição das listas de variáveis conforme as hipóteses - ATUALIZADA
+moedas    <- c("M1_processado", "M2_processado", "DV_processado")
+spreads   <- c("S1_processado", "S2_processado", "S3_processado", "S4_processado")
+industria <- c("IND1_processado", "IND2_processado", "IND3_processado", "IND4_processado", "IND5_processado", "IND6_processado", "IND7_processado")
+pibs      <- c("PIB_processado", "PIBAgro_processado", "PIBInd_processado", "PIBServ_processado", "PIBExAgro_processado")
+poupanca_2004 <- "Poup2004"
+poupanca_2007 <- "Poup2007"
+credito_total <- "CREDT_processado"
+credito_livre <- "CREDL_processado"
+credito_direcionado <- "CREDD_processado"
+capacidade <- "UCAP_processado"  # Adicionando UCAP
+
+# Federal Funds Rate (FFR)
+ffrm <- as.matrix(ffr)
+colnames(ffrm) <- "FFR"
+
+# Converter ffrm para série temporal se necessário
+if (!is.ts(ffrm)) {
+  ffrm_ts <- ts(ffrm, start = start(endo_vars), frequency = frequency(endo_vars))
+} else {
+  ffrm_ts <- ffrm
+}
+
+# Função auxiliar para obter dummies apropriadas baseada no nome da variável
+obter_dummies <- function(var_name) {
+  if (grepl("Poup2004", var_name)) return(D_Poup2004)
+  if (grepl("Poup2007", var_name)) return(D_Poup2007)
+  if (grepl("UCAP_processado", var_name)) return(D_UCAP)
+  return(NULL)
+}
+
+# Lista de todos os modelos que serão estimados - ATUALIZADA com modelos UCAP
+modelos <- c(
+  # Modelos originais H1
+  "H1: CREDT vs Poup2004", "H1: CREDL vs Poup2007", "H1: CREDD vs Poup2007",
+  
+  # Modelos originais H2
+  "H2: M1_processado vs S1_processado", "H2: M1_processado vs S2_processado", "H2: M1_processado vs S3_processado",
+  "H2: M1_processado vs S4_processado", "H2: M2_processado vs S1_processado", "H2: M2_processado vs S2_processado",
+  "H2: M2_processado vs S3_processado", "H2: M2_processado vs S4_processado", "H2: DV_processado vs S1_processado",
+  "H2: DV_processado vs S2_processado", "H2: DV_processado vs S3_processado", "H2: DV_processado vs S4_processado",
+  
+  # Modelos originais H3
+  "H3: S1_processado vs IND1_processado", "H3: S1_processado vs IND2_processado", "H3: S1_processado vs IND3_processado",
+  "H3: S1_processado vs IND4_processado", "H3: S1_processado vs IND5_processado", "H3: S1_processado vs IND6_processado",
+  "H3: S1_processado vs IND7_processado", "H3: S2_processado vs IND1_processado", "H3: S2_processado vs IND2_processado",
+  "H3: S2_processado vs IND3_processado", "H3: S2_processado vs IND4_processado", "H3: S2_processado vs IND5_processado",
+  "H3: S2_processado vs IND6_processado", "H3: S2_processado vs IND7_processado", "H3: S3_processado vs IND1_processado",
+  "H3: S3_processado vs IND2_processado", "H3: S3_processado vs IND3_processado", "H3: S3_processado vs IND4_processado",
+  "H3: S3_processado vs IND5_processado", "H3: S3_processado vs IND6_processado", "H3: S3_processado vs IND7_processado",
+  "H3: S4_processado vs IND1_processado", "H3: S4_processado vs IND2_processado", "H3: S4_processado vs IND3_processado",
+  "H3: S4_processado vs IND4_processado", "H3: S4_processado vs IND5_processado", "H3: S4_processado vs IND6_processado",
+  "H3: S4_processado vs IND7_processado", "H3: S1_processado vs PIB_processado", "H3: S1_processado vs PIBAgro_processado",
+  "H3: S1_processado vs PIBInd_processado", "H3: S1_processado vs PIBServ_processado", "H3: S1_processado vs PIBExAgro_processado",
+  "H3: S2_processado vs PIB_processado", "H3: S2_processado vs PIBAgro_processado", "H3: S2_processado vs PIBInd_processado",
+  "H3: S2_processado vs PIBServ_processado", "H3: S2_processado vs PIBExAgro_processado", "H3: S3_processado vs PIB_processado",
+  "H3: S3_processado vs PIBAgro_processado", "H3: S3_processado vs PIBInd_processado", "H3: S3_processado vs PIBServ_processado",
+  "H3: S3_processado vs PIBExAgro_processado", "H3: S4_processado vs PIB_processado", "H3: S4_processado vs PIBAgro_processado",
+  "H3: S4_processado vs PIBInd_processado", "H3: S4_processado vs PIBServ_processado", "H3: S4_processado vs PIBExAgro_processado",
+  "H3: M1_processado vs IND1_processado", "H3: M1_processado vs IND2_processado", "H3: M1_processado vs IND3_processado",
+  "H3: M1_processado vs IND4_processado", "H3: M1_processado vs IND5_processado", "H3: M1_processado vs IND6_processado",
+  "H3: M1_processado vs IND7_processado", "H3: M2_processado vs IND1_processado", "H3: M2_processado vs IND2_processado",
+  "H3: M2_processado vs IND3_processado", "H3: M2_processado vs IND4_processado", "H3: M2_processado vs IND5_processado",
+  "H3: M2_processado vs IND6_processado", "H3: M2_processado vs IND7_processado", "H3: DV_processado vs IND1_processado",
+  "H3: DV_processado vs IND2_processado", "H3: DV_processado vs IND3_processado", "H3: DV_processado vs IND4_processado",
+  "H3: DV_processado vs IND5_processado", "H3: DV_processado vs IND6_processado", "H3: DV_processado vs IND7_processado",
+  "H3: M1_processado vs PIB_processado", "H3: M1_processado vs PIBAgro_processado", "H3: M1_processado vs PIBInd_processado",
+  "H3: M1_processado vs PIBServ_processado", "H3: M1_processado vs PIBExAgro_processado", "H3: M2_processado vs PIB_processado",
+  "H3: M2_processado vs PIBAgro_processado", "H3: M2_processado vs PIBInd_processado", "H3: M2_processado vs PIBServ_processado",
+  "H3: M2_processado vs PIBExAgro_processado", "H3: DV_processado vs PIB_processado", "H3: DV_processado vs PIBAgro_processado",
+  "H3: DV_processado vs PIBInd_processado", "H3: DV_processado vs PIBServ_processado", "H3: DV_processado vs PIBExAgro_processado",
+  
+  # NOVOS MODELOS COM UCAP - Spreads vs UCAP
+  "H3: S1_processado vs UCAP_processado", "H3: S2_processado vs UCAP_processado", 
+  "H3: S3_processado vs UCAP_processado", "H3: S4_processado vs UCAP_processado",
+  
+  # NOVOS MODELOS COM UCAP - Moedas vs UCAP
+  "H3: M1_processado vs UCAP_processado", "H3: M2_processado vs UCAP_processado", 
+  "H3: DV_processado vs UCAP_processado"
+)
+```
+
+### Lag selection
+
+*Passo 3:* Selecionar o número ótimo de defasagens (p) do modelo VAR;
+
+```{r}
+# Carregar bibliotecas necessárias
+library(vars)
+
+# Função para calcular lags ótimos (mantida igual)
+calcular_lags_otimos_bivariado_com_dummies <- function(dados, var1_nome, var2_nome, 
+                                                       exogen = NULL, dummies_list = NULL, 
+                                                       dummy_nome = NULL,
+                                                       lag.max = 10, type = "const") {
+  var1 <- dados[, var1_nome]
+  var2 <- dados[, var2_nome]
+  
+  dados_modelo <- cbind(var1, var2)
+  colnames(dados_modelo) <- c(var1_nome, var2_nome)
+  
+  if (!is.ts(dados_modelo)) {
+    dados_modelo <- ts(dados_modelo, start = start(dados), frequency = frequency(dados))
+  }
+  
+  exogen_total <- NULL
+  exogen_nomes <- c()
+
+  if (!is.null(exogen)) {
+    if (!is.ts(exogen)) {
+      exogen <- ts(exogen, start = start(dados), frequency = frequency(dados))
+    }
+    
+    tryCatch({
+      exogen_window <- window(exogen, start = start(dados_modelo), end = end(dados_modelo))
+      if (nrow(exogen_window) == nrow(dados_modelo)) {
+        exogen_total <- exogen_window
+        exogen_nomes <- c(exogen_nomes, "FFR")
+      } else {
+        cat("Aviso: Incompatibilidade de tamanho entre dados e FFR. FFR não será usado.\n")
+      }
+    }, error = function(e) {
+      cat("Aviso: Erro ao alinhar FFR. FFR não será usado.\n")
+    })
+  }
+  
+  if (!is.null(dummies_list)) {
+    if (!is.ts(dummies_list)) {
+      tryCatch({
+        dummies_list <- ts(dummies_list, start = start(dados), frequency = frequency(dados))
+      }, error = function(e) {
+        cat("Aviso: Não foi possível converter dummies_list para série temporal.\n")
+        return(NULL)
+      })
+    }
+    
+    tryCatch({
+      dummies_window <- window(dummies_list, start = start(dados_modelo), end = end(dados_modelo))
+      if (nrow(dummies_window) == nrow(dados_modelo)) {
+        if (!is.null(exogen_total)) {
+          exogen_total <- cbind(exogen_total, dummies_window)
+        } else {
+          exogen_total <- dummies_window
+        }
+        if (!is.null(dummy_nome)) {
+          exogen_nomes <- c(exogen_nomes, dummy_nome)
+        }
+      } else {
+        cat("Aviso: Incompatibilidade de tamanho entre dados e dummies. Dummies não serão usadas.\n")
+      }
+    }, error = function(e) {
+      cat("Aviso: Erro ao alinhar dummies. Dummies não serão usadas.\n")
+    })
+  }
+
+  # Unir nomes das variáveis exógenas
+  exogen_nomes_str <- paste(exogen_nomes, collapse = ",")
+  if (nchar(exogen_nomes_str) == 0) {
+    exogen_nomes_str <- "Nenhuma"
+  }
+
+  tryCatch({
+    if (is.null(exogen_total)) {
+      sel <- VARselect(dados_modelo, lag.max = lag.max, type = type)
+    } else {
+      sel <- VARselect(dados_modelo, lag.max = lag.max, type = type, exogen = exogen_total)
+    }
+    
+    return(list(
+      AIC = sel$selection["AIC(n)"],
+      BIC = sel$selection["SC(n)"],
+      HQ = sel$selection["HQ(n)"],
+      Exogenas = exogen_nomes_str
+    ))
+  }, error = function(e) {
+    cat("Erro no modelo", var1_nome, "vs", var2_nome, ":", e$message, "\n")
+    return(list(
+      AIC = NA,
+      BIC = NA,
+      HQ = NA,
+      Exogenas = "Erro"
+    ))
+  })
+}
+
+# Dataframe para armazenar os resultados
+resultados_lagsD <- data.frame(
+  Hipotese = character(),
+  Modelo = character(),
+  AIC = numeric(),
+  BIC = numeric(),
+  HQ = numeric(),
+  Exogenas = character(),
+  stringsAsFactors = FALSE
+)
+
+# LOOP PRINCIPAL CORRIGIDO
+for (modelo in modelos) {
+  cat("Processando com dummies:", modelo, "\n")
+  
+  hipotese <- substr(modelo, 1, 2)
+  partes <- strsplit(modelo, " vs ")[[1]]
+  var1_nome <- trimws(gsub("^H[0-9]: ", "", partes[1]))
+  var2_nome <- trimws(partes[2])
+  
+  dados_usar <- endo_vars
+  exogen_usar <- NULL
+  dummies_usar <- NULL
+  nome_dummy_usar <- NULL
+  
+  if (hipotese == "H1") {
+    # Processar nomes das variáveis H1
+    if (var1_nome == "CREDT") var1_nome <- "CREDT_processado"
+    if (var1_nome == "CREDL") var1_nome <- "CREDL_processado"
+    if (var1_nome == "CREDD") var1_nome <- "CREDD_processado"
+    
+    # Lógica específica para H1 - CORREÇÃO AQUI
+    if (var2_nome == "Poup2004") {
+      dados_usar <- endo_vars
+      exogen_usar <- NULL
+      dummies_usar <- D_Poup2004
+      nome_dummy_usar <- "D_Poup2004"
+    } else if (var2_nome == "Poup2007") {
+      # Converter endo_vars_2007 para série temporal
+      dados_usar <- ts(endo_vars_2007, start = c(2007, 1), frequency = 4)
+      exogen_usar <- NULL
+      # Usar D_Poup2007 diretamente (já está no período correto)
+      dummies_usar <- D_Poup2007
+      nome_dummy_usar <- "D_Poup2007"
+    } else {
+      # Para outros casos H1, não usar dummies
+      dados_usar <- endo_vars
+      exogen_usar <- NULL
+      dummies_usar <- NULL
+      nome_dummy_usar <- NULL
+    }
+    
+  } else if (hipotese == "H2") {
+    # H2: Sempre usar FFR (incluindo para SPREAD) + dummies apropriadas
+    dados_usar <- endo_vars
+    exogen_usar <- ffrm_ts
+    
+    # CORREÇÃO: Usar função corrigida
+    dummies_var1 <- obter_dummies_corrigido(var1_nome)
+    dummies_var2 <- obter_dummies_corrigido(var2_nome)
+    nome_var1 <- obter_nome_dummy(var1_nome)
+    nome_var2 <- obter_nome_dummy(var2_nome)
+    
+    if (!is.null(dummies_var1)) {
+      dummies_usar <- dummies_var1
+      nome_dummy_usar <- nome_var1
+    } else if (!is.null(dummies_var2)) {
+      dummies_usar <- dummies_var2
+      nome_dummy_usar <- nome_var2
+    }
+    
+  } else if (hipotese == "H3") {
+    # H3: FFR para séries S1-S4 E para SPREAD, dummies apropriadas
+    dados_usar <- endo_vars
+    if (grepl("^S[1-4]_processado", var1_nome) || var1_nome == "Spread" || var2_nome == "Spread") {
+      exogen_usar <- ffrm_ts
+    } else {
+      exogen_usar <- NULL
+    }
+    
+    # CORREÇÃO: Usar função corrigida para obter as dummies
+    dummies_var1 <- obter_dummies_corrigido(var1_nome)
+    dummies_var2 <- obter_dummies_corrigido(var2_nome)
+    nome_var1 <- obter_nome_dummy(var1_nome)
+    nome_var2 <- obter_nome_dummy(var2_nome)
+    
+    # Modificando para combinar ambas as dummies, se disponíveis
+    if (!is.null(dummies_var1) && !is.null(dummies_var2)) {
+      dummies_usar <- cbind(dummies_var1, dummies_var2)
+      nome_dummy_usar <- paste(nome_var1, nome_var2, sep = ",")
+    } else if (!is.null(dummies_var1)) {
+      dummies_usar <- dummies_var1
+      nome_dummy_usar <- nome_var1
+    } else if (!is.null(dummies_var2)) {
+      dummies_usar <- dummies_var2
+      nome_dummy_usar <- nome_var2
+    }
+  }
+
+  # Calcular lags ótimos
+  lags <- calcular_lags_otimos_bivariado_com_dummies(
+    dados = dados_usar,
+    var1_nome = var1_nome,
+    var2_nome = var2_nome,
+    exogen = exogen_usar,
+    dummies_list = dummies_usar,
+    dummy_nome = nome_dummy_usar,
+    lag.max = 10
+  )
+  
+  # Adicionar ao dataframe
+  resultados_lagsD <- rbind(resultados_lagsD, data.frame(
+    Hipotese = hipotese,
+    Modelo = modelo,
+    AIC = lags$AIC,
+    BIC = lags$BIC,
+    HQ = lags$HQ,
+    Exogenas = lags$Exogenas,
+    stringsAsFactors = FALSE
+  ))
+}
+
+# Visualizar resultados
+cat("\n=== PRIMEIROS 20 RESULTADOS CORRIGIDOS ===\n")
+print(head(resultados_lagsD, 20))
+
+# Resumo por hipótese
+cat("\n=== RESUMO POR HIPÓTESE (CORRIGIDO) ===\n")
+for (h in unique(resultados_lagsD$Hipotese)) {
+  subset_h <- resultados_lagsD[resultados_lagsD$Hipotese == h, ]
+  cat("\nHipótese", h, ":\n")
+  cat("Total de modelos:", nrow(subset_h), "\n")
+  cat("Lag médio AIC:", round(mean(subset_h$AIC, na.rm = TRUE), 2), "\n")
+  cat("Lag médio BIC:", round(mean(subset_h$BIC, na.rm = TRUE), 2), "\n")
+  cat("Lag médio HQ:", round(mean(subset_h$HQ, na.rm = TRUE), 2), "\n")
+}
+
+# Visualizar todos os resultados
+cat("\n=== TODOS OS RESULTADOS CORRIGIDOS ===\n")
+print(resultados_lagsD)
+
+# VERIFICAÇÃO: Mostrar quais exógenas estão sendo usadas para DV_processado e Spread
+cat("\n=== VERIFICAÇÃO: EXÓGENAS PARA DV_processado e Spread ===\n")
+dv_spread_models <- resultados_lagsD[
+  grepl("DV_processado|Spread", resultados_lagsD$Modelo), 
+]
+print(dv_spread_models[, c("Modelo", "Exogenas")])
+
+# VERIFICAÇÃO ESPECÍFICA: Todos os modelos com SPREAD devem ter FFR
+cat("\n=== VERIFICAÇÃO ESPECÍFICA: MODELOS COM SPREAD ===\n")
+spread_models <- resultados_lagsD[
+  grepl("Spread", resultados_lagsD$Modelo), 
+]
+cat("Total de modelos com Spread:", nrow(spread_models), "\n")
+spread_com_ffr <- sum(grepl("FFR", spread_models$Exogenas))
+cat("Modelos com Spread que usam FFR:", spread_com_ffr, "\n")
+cat("Modelos com Spread SEM FFR:", nrow(spread_models) - spread_com_ffr, "\n")
+
+if (spread_com_ffr < nrow(spread_models)) {
+  cat("\n⚠️  ATENÇÃO: Alguns modelos com Spread não estão usando FFR!\n")
+  spread_sem_ffr <- spread_models[!grepl("FFR", spread_models$Exogenas), ]
+  print(spread_sem_ffr[, c("Modelo", "Exogenas")])
+} else {
+  cat("\n✅ OK: Todos os modelos com Spread estão usando FFR corretamente.\n")
+}
+
+# VERIFICAÇÃO ADICIONAL: Modelos H1 com Poup2007
+cat("\n=== VERIFICAÇÃO: MODELOS H1 COM Poup2007 ===\n")
+h1_poup2007_models <- resultados_lagsD[
+  resultados_lagsD$Hipotese == "H1" & grepl("Poup2007", resultados_lagsD$Modelo), 
+]
+cat("Total de modelos H1 com Poup2007:", nrow(h1_poup2007_models), "\n")
+print(h1_poup2007_models[, c("Modelo", "Exogenas")])
+```
+
+Excel for table formatting
+
+
+### Level models
+
+*Passo 4:* Construir um modelo VAR com as variáveis em nível, independentemente da ordem de integração das variáveis relacionadas
+
+Neste passo cada modelo é estimado considerando o *lag ótimo* encontrado na etapa anterior
+
+```{r}
+# Modelos VARX com Dummies Sazonais
+
+library(vars)
+
+# Lista para armazenar todos os modelos VAR
+varpD <- list() # Estes são VAR(p*) em nível
+# Lista para armazenar os p_stars (lags BIC) utilizados
+lags_bic_utilizados <- list()
+
+# Função para estimar e salvar os modelos VAR (VAR(p*) em nível) com dummies
+estimar_var_nivel_com_p_star <- function(df, var1, var2, model_name, lag_p_star, exogen = NULL, dummies = NULL) {
+  # Seleciona as duas variáveis do modelo
+  X <- df[, c(var1, var2)]
+  colnames(X) <- c(var1, var2)
+  
+  # Garantir que X seja série temporal
+  if (!is.ts(X)) {
+    X <- ts(X, start = start(df), frequency = frequency(df))
+  }
+
+  # Converte lag_p_star para inteiro, caso ainda não seja
+  lag_p_star_final <- as.integer(lag_p_star)
+  
+  # Combinar variáveis exógenas (FFR + dummies sazonais)
+  exogen_total <- NULL
+  
+  # Adicionar FFR se fornecido
+  if (!is.null(exogen)) {
+    # Converter para série temporal se necessário
+    if (!is.ts(exogen)) {
+      if (is.data.frame(exogen) || is.matrix(exogen)) {
+        exogen <- ts(as.matrix(exogen), start = start(X), frequency = frequency(X))
+      }
+    }
+    # Alinhar com X
+    exogen_aligned <- window(exogen, start = start(X), end = end(X))
+    if (nrow(exogen_aligned) == nrow(X)) {
+      exogen_total <- exogen_aligned
+      # MODIFICAÇÃO: Garantir que o nome da coluna seja FFR
+      if (ncol(exogen_total) == 1 && colnames(exogen_total)[1] != "FFR") {
+        colnames(exogen_total) <- "FFR"
+      }
+    }
+  }
+  
+  # Adicionar dummies sazonais se fornecidas
+  if (!is.null(dummies)) {
+    # Garantir que dummies seja série temporal
+    if (!is.ts(dummies)) {
+      dummies <- ts(dummies, start = start(df), frequency = frequency(df))
+    }
+    
+    # Alinhar dummies com X
+    tryCatch({
+      dummies_aligned <- window(dummies, start = start(X), end = end(X))
+      if (nrow(dummies_aligned) == nrow(X)) {
+        if (!is.null(exogen_total)) {
+          # MODIFICAÇÃO: Manter os nomes separados ao combinar
+          # Preservar os nomes originais das dummies
+          dummy_names <- colnames(dummies_aligned)
+          # Combinar FFR com dummies mantendo os nomes
+          exogen_total <- cbind(exogen_total, dummies_aligned)
+          # Garantir que os nomes sejam preservados
+          colnames(exogen_total) <- c("FFR", dummy_names)
+        } else {
+          # Usar apenas dummies
+          exogen_total <- dummies_aligned
+        }
+      }
+    }, error = function(e) {
+      cat("Aviso: Erro ao alinhar dummies para", model_name, "\n")
+    })
+  }
+
+  # Estimar o modelo
+  if (is.null(exogen_total)) {
+    mod <- VAR(X, p = lag_p_star_final, type = "const")
+  } else {
+    mod <- VAR(X, p = lag_p_star_final, type = "const", exogen = exogen_total)
+  }
+
+  # Salva o modelo na lista global
+  varpD[[model_name]] <<- mod
+  # Salva o lag BIC (p*) utilizado para este modelo
+  lags_bic_utilizados[[model_name]] <<- lag_p_star_final
+
+  return(mod)
+}
+
+# Função auxiliar para obter o lag p* (baseado no BIC) do dataframe.
+get_p_star_bic_from_df <- function(model_name_query, lags_df) {
+  lag_bic_val <- lags_df[lags_df$Modelo == model_name_query, "BIC"]
+  if (length(lag_bic_val) == 0) {
+    stop(paste("Modelo", model_name_query, "não encontrado em resultados_lagsD."))
+  }
+  if (length(lag_bic_val) > 1) {
+    warning(paste("Múltiplas entradas para o modelo", model_name_query, "em resultados_lagsD. Usando a primeira."))
+    lag_bic_val <- lag_bic_val[1]
+  }
+  # Retorna o valor BIC diretamente como inteiro
+  p_star <- as.integer(lag_bic_val)
+  return(p_star)
+}
+
+# Garantir que endo_vars_2007 seja série temporal
+if (!is.ts(endo_vars_2007)) {
+  endo_vars_2007 <- window(endo_vars, start = c(2007, 1))
+}
+
+# Converter ffrm para série temporal se necessário
+if (!is.ts(ffrm)) {
+  ffrm_ts <- ts(ffrm, start = start(endo_vars), frequency = frequency(endo_vars))
+} else {
+  ffrm_ts <- ffrm
+}
+
+# MODIFICAÇÃO: Garantir que ffrm_ts tenha o nome correto
+if (ncol(ffrm_ts) == 1 && colnames(ffrm_ts)[1] != "FFR") {
+  colnames(ffrm_ts) <- "FFR"
+}
+
+# --- Estimação dos modelos VAR(p*) em nível com dummies, usando lags BIC de resultados_lagsD ---
+
+## Hipótese 1: Crédito não é causado pela poupança
+model_name_h1_1 <- "H1: CREDT vs Poup2004"
+p_star_h1_1 <- get_p_star_bic_from_df(model_name_h1_1, resultados_lagsD)
+estimar_var_nivel_com_p_star(endo_vars, "CREDT_processado", "Poup2004", model_name_h1_1, p_star_h1_1,
+                             dummies = D_Poup2004)
+
+model_name_h1_2 <- "H1: CREDL vs Poup2007"
+p_star_h1_2 <- get_p_star_bic_from_df(model_name_h1_2, resultados_lagsD)
+estimar_var_nivel_com_p_star(endo_vars_2007, "CREDL_processado", "Poup2007", model_name_h1_2, p_star_h1_2,
+                             dummies = D_Poup2007)
+
+model_name_h1_3 <- "H1: CREDD vs Poup2007"
+p_star_h1_3 <- get_p_star_bic_from_df(model_name_h1_3, resultados_lagsD)
+estimar_var_nivel_com_p_star(endo_vars_2007, "CREDD_processado", "Poup2007", model_name_h1_3, p_star_h1_3,
+                             dummies = D_Poup2007)
+
+## Hipótese 2: Aumento do agregado monetário causa aumento do spread
+# Com ffr como variável exógena e dummies apropriadas
+for (m in moedas) {
+  for (s in spreads) {
+    model_name <- paste0("H2: ", m, " vs ", s)
+    p_star_bic <- get_p_star_bic_from_df(model_name, resultados_lagsD)
+    
+    # Obter dummies apropriadas
+    dummies_m <- obter_dummies(m)
+    dummies_s <- obter_dummies(s)
+    dummies_usar <- if (!is.null(dummies_m)) dummies_m else dummies_s
+    
+    estimar_var_nivel_com_p_star(endo_vars, m, s, model_name, p_star_bic,
+                                 exogen = ffrm_ts, dummies = dummies_usar)
+  }
+}
+
+## Hipótese 3: Aumento do spread ou da moeda causa variações na indústria e no produto agregado
+# (a) Spread × Indústria (com ffr e dummies)
+for (s_var in spreads) {
+  for (ind in industria) {
+    model_name <- paste0("H3: ", s_var, " vs ", ind)
+    p_star_bic <- get_p_star_bic_from_df(model_name, resultados_lagsD)
+    
+    # Obter dummies apropriadas
+    dummies_s <- obter_dummies(s_var)
+    dummies_ind <- obter_dummies(ind)
+    dummies_usar <- if (!is.null(dummies_s)) dummies_s else dummies_ind
+    
+    estimar_var_nivel_com_p_star(endo_vars, s_var, ind, model_name, p_star_bic,
+                                 exogen = ffrm_ts, dummies = dummies_usar)
+  }
+}
+
+# (b) Spread × PIBs (com ffr e dummies)
+for (s_var in spreads) {
+  for (pib_var in pibs) {
+    model_name <- paste0("H3: ", s_var, " vs ", pib_var)
+    p_star_bic <- get_p_star_bic_from_df(model_name, resultados_lagsD)
+    
+    # Obter dummies apropriadas
+    dummies_s <- obter_dummies(s_var)
+    dummies_pib <- obter_dummies(pib_var)
+    dummies_usar <- if (!is.null(dummies_s)) dummies_s else dummies_pib
+    
+    estimar_var_nivel_com_p_star(endo_vars, s_var, pib_var, model_name, p_star_bic,
+                                 exogen = ffrm_ts, dummies = dummies_usar)
+  }
+}
+
+# (c) Moeda × Indústria (sem ffr, mas com dummies)
+for (m_var in moedas) {
+  for (ind_var in industria) {
+    model_name <- paste0("H3: ", m_var, " vs ", ind_var)
+    p_star_bic <- get_p_star_bic_from_df(model_name, resultados_lagsD)
+    
+    # Obter dummies apropriadas
+    dummies_m <- obter_dummies(m_var)
+    dummies_ind <- obter_dummies(ind_var)
+    dummies_usar <- if (!is.null(dummies_m)) dummies_m else dummies_ind
+    
+    estimar_var_nivel_com_p_star(endo_vars, m_var, ind_var, model_name, p_star_bic,
+                                 dummies = dummies_usar)
+  }
+}
+
+# (d) Moeda × PIBs (sem ffr, mas com dummies)
+for (m_var in moedas) {
+  for (pib_var in pibs) {
+    model_name <- paste0("H3: ", m_var, " vs ", pib_var)
+    p_star_bic <- get_p_star_bic_from_df(model_name, resultados_lagsD)
+    
+    # Obter dummies apropriadas
+    dummies_m <- obter_dummies(m_var)
+    dummies_pib <- obter_dummies(pib_var)
+    dummies_usar <- if (!is.null(dummies_m)) dummies_m else dummies_pib
+    
+    estimar_var_nivel_com_p_star(endo_vars, m_var, pib_var, model_name, p_star_bic,
+                                 dummies = dummies_usar)
+  }
+}
+
+# NOVOS MODELOS COM UCAP
+# (e) Spread × UCAP (com ffr e dummies)
+for (s_var in spreads) {
+  model_name <- paste0("H3: ", s_var, " vs UCAP_processado")
+  p_star_bic <- get_p_star_bic_from_df(model_name, resultados_lagsD)
+  
+  # Obter dummies apropriadas
+  dummies_s <- obter_dummies(s_var)
+  dummies_ucap <- obter_dummies("UCAP_processado")
+  dummies_usar <- if (!is.null(dummies_s)) dummies_s else dummies_ucap
+  
+  estimar_var_nivel_com_p_star(endo_vars, s_var, "UCAP_processado", model_name, p_star_bic,
+                               exogen = ffrm_ts, dummies = dummies_usar)
+}
+
+# (f) Moeda × UCAP (sem ffr, mas com dummies)
+for (m_var in moedas) {
+  model_name <- paste0("H3: ", m_var, " vs UCAP_processado")
+  p_star_bic <- get_p_star_bic_from_df(model_name, resultados_lagsD)
+  
+  # Obter dummies apropriadas
+  dummies_m <- obter_dummies(m_var)
+  dummies_ucap <- obter_dummies("UCAP_processado")
+  dummies_usar <- if (!is.null(dummies_m)) dummies_m else dummies_ucap
+  
+  estimar_var_nivel_com_p_star(endo_vars, m_var, "UCAP_processado", model_name, p_star_bic,
+                               dummies = dummies_usar)
+}
+
+# Verificar quantos modelos foram estimados e os lags BIC (p*) utilizados
+cat("Total de modelos VAR(p*) em nível estimados:", length(varpD), "\n")
+cat("Nomes dos modelos estimados:\n")
+print(names(varpD))
+cat("\nLags BIC (p*) utilizados para cada modelo:\n")
+for(name in names(lags_bic_utilizados)){
+    cat(name, ": Lag p* =", lags_bic_utilizados[[name]], "\n")
+}
+
+# Verificar se alguns modelos têm variáveis exógenas
+cat("\n\nVerificação de variáveis exógenas nos modelos:\n")
+for(name in names(varpD)) {
+  mod <- varpD[[name]]
+  if (!is.null(mod$exogen)) {
+    cat(name, ": tem", ncol(mod$exogen), "variáveis exógenas\n")
+    # MODIFICAÇÃO: Mostrar os nomes das variáveis exógenas
+    cat("  Variáveis exógenas:", paste(colnames(mod$exogen), collapse = ", "), "\n")
+  }
+}
+
+```
+
+### VARX (p+dmax)
+
+*Passo 5:* Construir um modelo (p+dmax) no qual eu somo *2* ao p* identificado nas etapas anteriores.
+
+```{r}
+# Modelos VARX (p+dmax) com Dummies Sazonais - Toda e Yamamoto
+
+library(vars)
+
+# Definindo dmax globalmente conforme solicitado para o procedimento T-Y
+dmax <- 2
+
+# Lista para armazenar todos os modelos VAR
+varpdmaxD <- list() # Estes agora serão VAR(p* + dmax) em nível
+# Lista para armazenar os p_stars (lags BIC) utilizados
+lags_bic_utilizados <- list()
+
+# Função para estimar e salvar os modelos VAR (agora VAR(p* + dmax) em nível) com dummies
+estimar_var_nivel_com_p_star <- function(df, var1, var2, model_name, lag_p_star, exogen = NULL, dummies = NULL) {
+  # Seleciona as duas variáveis do modelo
+  X <- df[, c(var1, var2)]
+  colnames(X) <- c(var1, var2)
+  
+  # Garantir que X seja série temporal
+  if (!is.ts(X)) {
+    X <- ts(X, start = start(df), frequency = frequency(df))
+  }
+
+  # Converte lag_p_star para inteiro, caso ainda não seja
+  lag_p_star_final <- as.integer(lag_p_star)
+
+  # Calcula o lag a ser usado na estimação: p* + dmax
+  lag_para_estimacao <- lag_p_star_final + dmax # ALTERAÇÃO PRINCIPAL
+  
+  # Combinar variáveis exógenas (FFR + dummies sazonais)
+  exogen_total <- NULL
+  
+  # Adicionar FFR se fornecido
+  if (!is.null(exogen)) {
+    # Converter para série temporal se necessário
+    if (!is.ts(exogen)) {
+      if (is.data.frame(exogen) || is.matrix(exogen)) {
+        exogen <- ts(as.matrix(exogen), start = start(X), frequency = frequency(X))
+      }
+    }
+    # Alinhar com X
+    tryCatch({
+      exogen_aligned <- window(exogen, start = start(X), end = end(X))
+      if (nrow(exogen_aligned) == nrow(X)) {
+        exogen_total <- exogen_aligned
+        # MODIFICAÇÃO: Garantir que o nome da coluna seja FFR
+        if (ncol(exogen_total) == 1 && colnames(exogen_total)[1] != "FFR") {
+          colnames(exogen_total) <- "FFR"
+        }
+      }
+    }, error = function(e) {
+      cat("Aviso: Erro ao alinhar FFR para", model_name, "\n")
+    })
+  }
+  
+  # Adicionar dummies sazonais se fornecidas
+  if (!is.null(dummies)) {
+    # Garantir que dummies seja série temporal
+    if (!is.ts(dummies)) {
+      dummies <- ts(dummies, start = start(df), frequency = frequency(df))
+    }
+    
+    # Alinhar dummies com X
+    tryCatch({
+      dummies_aligned <- window(dummies, start = start(X), end = end(X))
+      if (nrow(dummies_aligned) == nrow(X)) {
+        if (!is.null(exogen_total)) {
+          # MODIFICAÇÃO: Manter os nomes separados ao combinar
+          # Preservar os nomes originais das dummies
+          dummy_names <- colnames(dummies_aligned)
+          # Combinar FFR com dummies mantendo os nomes
+          exogen_total <- cbind(exogen_total, dummies_aligned)
+          # Garantir que os nomes sejam preservados
+          colnames(exogen_total) <- c("FFR", dummy_names)
+        } else {
+          # Usar apenas dummies
+          exogen_total <- dummies_aligned
+        }
+      }
+    }, error = function(e) {
+      cat("Aviso: Erro ao alinhar dummies para", model_name, "\n")
+    })
+  }
+
+  # Estimar o modelo
+  if (is.null(exogen_total)) {
+    mod <- VAR(X, p = lag_para_estimacao, type = "const")
+  } else {
+    mod <- VAR(X, p = lag_para_estimacao, type = "const", exogen = exogen_total)
+  }
+
+  # Salva o modelo na lista global
+  varpdmaxD[[model_name]] <<- mod
+  # Salva o lag BIC (p*) utilizado para este modelo (p* em si, não p* + dmax)
+  lags_bic_utilizados[[model_name]] <<- lag_p_star_final
+
+  return(mod)
+}
+
+# Função auxiliar para obter o lag p* (baseado no BIC) do dataframe.
+get_p_star_bic_from_df <- function(model_name_query, lags_df) {
+  lag_bic_val <- lags_df[lags_df$Modelo == model_name_query, "BIC"]
+  if (length(lag_bic_val) == 0) {
+    stop(paste("Modelo", model_name_query, "não encontrado em resultados_lagsD."))
+  }
+  if (length(lag_bic_val) > 1) {
+    warning(paste("Múltiplas entradas para o modelo", model_name_query, "em resultados_lagsD. Usando a primeira."))
+    lag_bic_val <- lag_bic_val[1]
+  }
+  # Retorna o valor BIC diretamente como inteiro
+  p_star <- as.integer(lag_bic_val)
+  return(p_star)
+}
+
+# Garantir que endo_vars_2007 seja série temporal
+if (!is.ts(endo_vars_2007)) {
+  endo_vars_2007 <- window(endo_vars, start = c(2007, 1))
+}
+
+# Converter ffrm para série temporal se necessário
+if (!is.ts(ffrm)) {
+  ffrm_ts <- ts(ffrm, start = start(endo_vars), frequency = frequency(endo_vars))
+} else {
+  ffrm_ts <- ffrm
+}
+
+# MODIFICAÇÃO: Garantir que ffrm_ts tenha o nome correto
+if (ncol(ffrm_ts) == 1 && colnames(ffrm_ts)[1] != "FFR") {
+  colnames(ffrm_ts) <- "FFR"
+}
+
+## Hipótese 1: Crédito não é causado pela poupança
+model_name_h1_1 <- "H1: CREDT vs Poup2004"
+p_star_h1_1 <- get_p_star_bic_from_df(model_name_h1_1, resultados_lagsD)
+estimar_var_nivel_com_p_star(endo_vars, "CREDT_processado", "Poup2004", model_name_h1_1, p_star_h1_1,
+                             dummies = D_Poup2004)
+
+model_name_h1_2 <- "H1: CREDL vs Poup2007"
+p_star_h1_2 <- get_p_star_bic_from_df(model_name_h1_2, resultados_lagsD)
+estimar_var_nivel_com_p_star(endo_vars_2007, "CREDL_processado", "Poup2007", model_name_h1_2, p_star_h1_2,
+                             dummies = D_Poup2007)
+
+model_name_h1_3 <- "H1: CREDD vs Poup2007"
+p_star_h1_3 <- get_p_star_bic_from_df(model_name_h1_3, resultados_lagsD)
+estimar_var_nivel_com_p_star(endo_vars_2007, "CREDD_processado", "Poup2007", model_name_h1_3, p_star_h1_3,
+                             dummies = D_Poup2007)
+
+## Hipótese 2: Aumento do agregado monetário causa aumento do spread
+# Com ffr como variável exógena e dummies apropriadas
+for (m in moedas) {
+  for (s in spreads) {
+    model_name <- paste0("H2: ", m, " vs ", s)
+    p_star_bic <- get_p_star_bic_from_df(model_name, resultados_lagsD)
+    
+    # Obter dummies apropriadas
+    dummies_m <- obter_dummies(m)
+    dummies_s <- obter_dummies(s)
+    dummies_usar <- if (!is.null(dummies_m)) dummies_m else dummies_s
+    
+    estimar_var_nivel_com_p_star(endo_vars, m, s, model_name, p_star_bic,
+                                 exogen = ffrm_ts, dummies = dummies_usar)
+  }
+}
+
+## Hipótese 3: Aumento do spread ou da moeda causa variações na indústria e no produto agregado
+# (a) Spread × Indústria (com ffr e dummies)
+for (s_var in spreads) {
+  for (ind in industria) {
+    model_name <- paste0("H3: ", s_var, " vs ", ind)
+    p_star_bic <- get_p_star_bic_from_df(model_name, resultados_lagsD)
+    
+    # Obter dummies apropriadas
+    dummies_s <- obter_dummies(s_var)
+    dummies_ind <- obter_dummies(ind)
+    dummies_usar <- if (!is.null(dummies_s)) dummies_s else dummies_ind
+    
+    estimar_var_nivel_com_p_star(endo_vars, s_var, ind, model_name, p_star_bic,
+                                 exogen = ffrm_ts, dummies = dummies_usar)
+  }
+}
+
+# (b) Spread × PIBs (com ffr e dummies)
+for (s_var in spreads) {
+  for (pib_var in pibs) {
+    model_name <- paste0("H3: ", s_var, " vs ", pib_var)
+    p_star_bic <- get_p_star_bic_from_df(model_name, resultados_lagsD)
+    
+    # Obter dummies apropriadas
+    dummies_s <- obter_dummies(s_var)
+    dummies_pib <- obter_dummies(pib_var)
+    dummies_usar <- if (!is.null(dummies_s)) dummies_s else dummies_pib
+    
+    estimar_var_nivel_com_p_star(endo_vars, s_var, pib_var, model_name, p_star_bic,
+                                 exogen = ffrm_ts, dummies = dummies_usar)
+  }
+}
+
+# (c) Moeda × Indústria (sem ffr, mas com dummies)
+for (m_var in moedas) {
+  for (ind_var in industria) {
+    model_name <- paste0("H3: ", m_var, " vs ", ind_var)
+    p_star_bic <- get_p_star_bic_from_df(model_name, resultados_lagsD)
+    
+    # Obter dummies apropriadas
+    dummies_m <- obter_dummies(m_var)
+    dummies_ind <- obter_dummies(ind_var)
+    dummies_usar <- if (!is.null(dummies_m)) dummies_m else dummies_ind
+    
+    estimar_var_nivel_com_p_star(endo_vars, m_var, ind_var, model_name, p_star_bic,
+                                 dummies = dummies_usar)
+  }
+}
+
+# (d) Moeda × PIBs (sem ffr, mas com dummies)
+for (m_var in moedas) {
+  for (pib_var in pibs) {
+    model_name <- paste0("H3: ", m_var, " vs ", pib_var)
+    p_star_bic <- get_p_star_bic_from_df(model_name, resultados_lagsD)
+    
+    # Obter dummies apropriadas
+    dummies_m <- obter_dummies(m_var)
+    dummies_pib <- obter_dummies(pib_var)
+    dummies_usar <- if (!is.null(dummies_m)) dummies_m else dummies_pib
+    
+    estimar_var_nivel_com_p_star(endo_vars, m_var, pib_var, model_name, p_star_bic,
+                                 dummies = dummies_usar)
+  }
+}
+
+# NOVOS MODELOS COM UCAP
+# (e) Spread × UCAP (com ffr e dummies)
+for (s_var in spreads) {
+  model_name <- paste0("H3: ", s_var, " vs UCAP_processado")
+  # Verificar se o modelo existe em resultados_lagsD
+  if (model_name %in% resultados_lagsD$Modelo) {
+    p_star_bic <- get_p_star_bic_from_df(model_name, resultados_lagsD)
+    
+    # Obter dummies apropriadas
+    dummies_s <- obter_dummies(s_var)
+    dummies_ucap <- obter_dummies("UCAP_processado")
+    dummies_usar <- if (!is.null(dummies_s)) dummies_s else dummies_ucap
+    
+    estimar_var_nivel_com_p_star(endo_vars, s_var, "UCAP_processado", model_name, p_star_bic,
+                                 exogen = ffrm_ts, dummies = dummies_usar)
+  }
+}
+
+# (f) Moeda × UCAP (sem ffr, mas com dummies)
+for (m_var in moedas) {
+  model_name <- paste0("H3: ", m_var, " vs UCAP_processado")
+  # Verificar se o modelo existe em resultados_lagsD
+  if (model_name %in% resultados_lagsD$Modelo) {
+    p_star_bic <- get_p_star_bic_from_df(model_name, resultados_lagsD)
+    
+    # Obter dummies apropriadas
+    dummies_m <- obter_dummies(m_var)
+    dummies_ucap <- obter_dummies("UCAP_processado")
+    dummies_usar <- if (!is.null(dummies_m)) dummies_m else dummies_ucap
+    
+    estimar_var_nivel_com_p_star(endo_vars, m_var, "UCAP_processado", model_name, p_star_bic,
+                                 dummies = dummies_usar)
+  }
+}
+
+# Verificar quantos modelos foram estimados e os lags BIC (p*) utilizados
+cat("Total de modelos VAR(p* + dmax) em nível estimados:", length(varpdmaxD), "\n")
+cat("Nomes dos modelos estimados:\n")
+print(names(varpdmaxD))
+cat("\nLags BIC (p*) e lags de estimação (p* + dmax) utilizados para cada modelo:\n")
+if (length(lags_bic_utilizados) > 0) {
+  for(name in names(lags_bic_utilizados)){
+      cat(name, ": Lag p* =", lags_bic_utilizados[[name]], ", Lag de estimação (p* + dmax) =", lags_bic_utilizados[[name]] + dmax, "\n")
+  }
+} else {
+  cat("Nenhum lag BIC foi registrado (verifique se os modelos foram estimados corretamente).\n")
+}
+
+# Verificar se alguns modelos têm variáveis exógenas
+cat("\n\nVerificação de variáveis exógenas nos modelos:\n")
+for(name in names(varpdmaxD)) {
+  mod <- varpdmaxD[[name]]
+  if (!is.null(mod$exogen)) {
+    cat(name, ": tem", ncol(mod$exogen), "variáveis exógenas\n")
+    # MODIFICAÇÃO: Mostrar os nomes das variáveis exógenas
+    cat("  Variáveis exógenas:", paste(colnames(mod$exogen), collapse = ", "), "\n")
+  }
+}
+
+# Mostrar valor de dmax utilizado
+cat("\n\nValor de dmax utilizado:", dmax, "\n")
+
+```
+
+### Serial Autocorrelation
+
+*Passo 6.0:* Serial Autocorrelation | VAR p+dmax 
+
+```{r}
+# Teste de Ausência de Autocorrelação Serial para modelos VARX com dummies
+
+# 0) Verificar se dmax está definido
+if (!exists("dmax")) {
+  dmax <- 2
+}
+
+# 1) Criar o dataframe maxiorderD com os lags originais (p* + dmax) usando resultados_lagsD
+if (exists("resultados_lagsD") && "Modelo" %in% colnames(resultados_lagsD) && "BIC" %in% colnames(resultados_lagsD)) {
+  maxiorderD <- data.frame(
+    Modelo = resultados_lagsD$Modelo,
+    Lag_Original_TY = resultados_lagsD$BIC + dmax, # p* (BIC) + dmax
+    stringsAsFactors = FALSE
+  )
+} else {
+  stop("O dataframe 'resultados_lagsD' não existe ou não contém as colunas 'Modelo' e 'BIC'.")
+}
+
+# 2) Teste de Ausência de Autocorrelação Serial
+
+# Cria dataframe para armazenar os p-values dos testes e o Lag_Original
+autocorr_pdmaxD <- data.frame(
+  Modelo = character(),
+  Lag_Original = integer(),
+  p_value_PT = numeric(),
+  p_value_BG = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Verifica se varpdmaxD existe
+if (!exists("varpdmaxD") || !is.list(varpdmaxD) || length(varpdmaxD) == 0) {
+  stop("A lista 'varpdmaxD' com os modelos VARX(p+dmax) com dummies não foi encontrada ou está vazia.")
+}
+
+# Aplica os testes para cada modelo na lista varpdmaxD
+for (nome_modelo in names(varpdmaxD)) {
+  
+  tryCatch({
+    # Teste Portmanteau ajustado
+    teste_pt <- serial.test(varpdmaxD[[nome_modelo]], lags.pt = 8, type = "PT.adjusted")
+    p_pt <- teste_pt$serial$p.value
+    
+    # Teste Breusch-Godfrey
+    teste_bg <- serial.test(varpdmaxD[[nome_modelo]], lags.bg = 4, type = "BG")
+    p_bg <- teste_bg$serial$p.value
+    
+    # Buscar o Lag_Original_TY do dataframe maxiorderD
+    lag_original_para_modelo <- maxiorderD$Lag_Original_TY[maxiorderD$Modelo == nome_modelo]
+    
+    # Verificar se o modelo foi encontrado em maxiorderD
+    if (length(lag_original_para_modelo) == 0) {
+      warning(paste("Modelo", nome_modelo, "não encontrado em maxiorderD. Lag_Original será NA."))
+      lag_original_valor <- NA_integer_
+    } else {
+      lag_original_valor <- as.integer(lag_original_para_modelo[1])
+    }
+    
+    # Adiciona os resultados ao dataframe
+    autocorr_pdmaxD <- rbind(autocorr_pdmaxD, data.frame(
+      Modelo = nome_modelo,
+      Lag_Original = lag_original_valor,
+      p_value_PT = p_pt,
+      p_value_BG = p_bg,
+      stringsAsFactors = FALSE
+    ))
+  }, error = function(e) {
+    cat("Erro ao testar modelo", nome_modelo, ":", e$message, "\n")
+    # Adiciona NA para modelos com erro
+    autocorr_pdmaxD <- rbind(autocorr_pdmaxD, data.frame(
+      Modelo = nome_modelo,
+      Lag_Original = NA_integer_,
+      p_value_PT = NA_real_,
+      p_value_BG = NA_real_,
+      stringsAsFactors = FALSE
+    ))
+  })
+}
+
+# Adiciona as colunas de verificação de significância
+autocorr_pdmaxD$PT_nao_rejeita_5 <- autocorr_pdmaxD$p_value_PT > 0.05
+autocorr_pdmaxD$PT_nao_rejeita_10 <- autocorr_pdmaxD$p_value_PT > 0.1
+autocorr_pdmaxD$BG_nao_rejeita_5 <- autocorr_pdmaxD$p_value_BG > 0.05
+autocorr_pdmaxD$BG_nao_rejeita_10 <- autocorr_pdmaxD$p_value_BG > 0.1
+
+# Coluna combinada para decisão sobre autocorrelação
+autocorr_pdmaxD$Nao_Rejeita_h0 <- ifelse(
+  !is.na(autocorr_pdmaxD$p_value_PT) & !is.na(autocorr_pdmaxD$p_value_BG) & 
+    (autocorr_pdmaxD$PT_nao_rejeita_10 | autocorr_pdmaxD$BG_nao_rejeita_10),
+  ifelse(autocorr_pdmaxD$PT_nao_rejeita_10 & autocorr_pdmaxD$BG_nao_rejeita_10, "10%", 
+         ifelse(autocorr_pdmaxD$PT_nao_rejeita_5 | autocorr_pdmaxD$BG_nao_rejeita_5, "5%", "Autocorrelação!")),
+  "Autocorrelação!"
+)
+
+# Ajuste para casos onde um dos p-values pode ser NA
+autocorr_pdmaxD$Nao_Rejeita_h0[is.na(autocorr_pdmaxD$p_value_PT) | is.na(autocorr_pdmaxD$p_value_BG)] <- "Erro no Teste"
+
+# Visualiza os primeiros resultados
+cat("\n=== RESULTADOS DOS TESTES DE AUTOCORRELAÇÃO SERIAL (MODELOS COM DUMMIES) ===\n")
+print(head(autocorr_pdmaxD, 10))
+
+# Modelos com problemas de autocorrelação
+cat("\n\nModelos com indicação de autocorrelação serial:\n")
+modelos_com_autocorr <- autocorr_pdmaxD[autocorr_pdmaxD$Nao_Rejeita_h0 == "Autocorrelação!" | 
+                                       autocorr_pdmaxD$Nao_Rejeita_h0 == "Erro no Teste", 
+                                       c("Modelo", "Lag_Original", "p_value_PT", "p_value_BG", "Nao_Rejeita_h0")]
+if (nrow(modelos_com_autocorr) > 0) {
+  print(modelos_com_autocorr)
+} else {
+  cat("Nenhum modelo apresentou problemas de autocorrelação serial.\n")
+}
+
+# Resumo estatístico
+cat("\n\nResumo dos p-values:\n")
+summary(autocorr_pdmaxD[, c("p_value_PT", "p_value_BG")])
+
+# Contagem de modelos por categoria
+cat("\n\nContagem de modelos por nível de rejeição:\n")
+table(autocorr_pdmaxD$Nao_Rejeita_h0)
+
+# Verificar influência das dummies comparando com modelos sem dummies (se existirem)
+if (exists("autocorr_pdmax")) {
+  cat("\n\n=== COMPARAÇÃO COM MODELOS SEM DUMMIES ===\n")
+  
+  # Merge dos resultados
+  comparacao <- merge(autocorr_pdmax[, c("Modelo", "p_value_PT", "p_value_BG", "Nao_Rejeita_h0")],
+                     autocorr_pdmaxD[, c("Modelo", "p_value_PT", "p_value_BG", "Nao_Rejeita_h0")],
+                     by = "Modelo", suffixes = c("_sem_dummy", "_com_dummy"), all = TRUE)
+  
+  # Mostrar modelos que mudaram de status
+  comparacao$Mudou_Status <- comparacao$Nao_Rejeita_h0_sem_dummy != comparacao$Nao_Rejeita_h0_com_dummy
+  
+  cat("\nModelos que mudaram de status após inclusão de dummies:\n")
+  modelos_mudaram <- comparacao[!is.na(comparacao$Mudou_Status) & comparacao$Mudou_Status, 
+                                c("Modelo", "Nao_Rejeita_h0_sem_dummy", "Nao_Rejeita_h0_com_dummy")]
+  if (nrow(modelos_mudaram) > 0) {
+    print(modelos_mudaram)
+  } else {
+    cat("Nenhum modelo mudou de status.\n")
+  }
+}
+
+# Salvar resultados
+cat("\n\nResultados salvos no objeto 'autocorr_pdmaxD'\n")
+```
+
+*Passo 6.1:* Autocorrelation treatment: automated re estimation of VARX p = 1,2,3.. + dmax 
+
+```{r}
+# Criar cópias das novas colunas se ainda não existirem
+if (!"Lag_Final" %in% names(autocorr_pdmaxD)) {
+  autocorr_pdmaxD$Lag_Final <- NA
+}
+if (!"Status_Final" %in% names(autocorr_pdmaxD)) {
+  autocorr_pdmaxD$Status_Final <- NA
+}
+
+# Primeiro, preencher Lag_Final com Lag_Original para TODOS os modelos
+autocorr_pdmaxD$Lag_Final <- autocorr_pdmaxD$Lag_Original
+
+# Lista de modelos com autocorrelação
+modelos_autocorr <- c(
+  "H1: CREDL vs Poup2007",
+  "H2: M2_processado vs S2_processado",
+  "H2: DV_processado vs S1_processado",
+  "H2: DV_processado vs S2_processado",
+  "H2: DV_processado vs S3_processado",
+  "H2: DV_processado vs S4_processado",
+  "H3: S4_processado vs IND4_processado",
+  "H3: S4_processado vs IND5_processado",
+  "H3: S4_processado vs IND6_processado",
+  "H3: M2_processado vs IND6_processado",
+  "H3: DV_processado vs IND1_processado",
+  "H3: DV_processado vs IND2_processado",
+  "H3: DV_processado vs IND3_processado",
+  "H3: DV_processado vs IND4_processado",
+  "H3: DV_processado vs IND5_processado",
+  "H3: DV_processado vs IND6_processado",
+  "H3: DV_processado vs IND7_processado",
+  "H3: DV_processado vs PIB_processado",
+  "H3: DV_processado vs PIBAgro_processado",
+  "H3: DV_processado vs PIBInd_processado",
+  "H3: DV_processado vs PIBServ_processado",
+  "H3: DV_processado vs PIBExAgro_processado",
+  "H3: DV_processado vs UCAP_processado"
+)
+
+# Aplicar a função a todos os modelos e atualizar o dataframe
+for (modelo in modelos_autocorr) {
+  cat("\n=== Reestimando modelo:", modelo, "===\n")
+  
+  # Encontrar a linha do modelo no dataframe
+  linha <- which(autocorr_pdmaxD$Modelo == modelo)
+  
+  if (length(linha) == 0) {
+    cat("AVISO: Modelo não encontrado no dataframe autocorr_pdmaxD\n")
+    next
+  }
+  
+  # Guardar o lag original
+  lag_original <- autocorr_pdmaxD$Lag_Original[linha]
+  
+  # Reestimar o modelo
+  varpdmaxD <- reestimar_modelo_var(modelo, varpdmaxD, lag_maximo = 10)
+  
+  # Verificar se o modelo foi atualizado e obter os novos resultados
+  if (modelo %in% names(varpdmaxD)) {
+    modelo_atualizado <- varpdmaxD[[modelo]]
+    
+    # Calcular o lag final (original + adicional)
+    lag_final <- lag_original + modelo_atualizado$p
+    autocorr_pdmaxD$Lag_Final[linha] <- lag_final
+    
+    # Realizar novos testes de autocorrelação
+    tryCatch({
+      teste_pt <- serial.test(modelo_atualizado, lags.pt = 8, type = "PT.adjusted")
+      p_pt <- teste_pt$serial$p.value
+      
+      teste_bg <- serial.test(modelo_atualizado, lags.bg = 4, type = "BG")
+      p_bg <- teste_bg$serial$p.value
+      
+      # Atualizar p-valores
+      autocorr_pdmaxD$p_value_PT[linha] <- p_pt
+      autocorr_pdmaxD$p_value_BG[linha] <- p_bg
+      
+      # Atualizar colunas de não rejeição
+      autocorr_pdmaxD$PT_nao_rejeita_5[linha] <- p_pt > 0.05
+      autocorr_pdmaxD$PT_nao_rejeita_10[linha] <- p_pt > 0.10
+      autocorr_pdmaxD$BG_nao_rejeita_5[linha] <- p_bg > 0.05
+      autocorr_pdmaxD$BG_nao_rejeita_10[linha] <- p_bg > 0.10
+      
+      # Determinar APENAS Status_Final (NÃO modificar Nao_Rejeita_h0)
+      if (is.na(p_pt) || is.na(p_bg)) {
+        autocorr_pdmaxD$Status_Final[linha] <- "ErroNaN"
+      } else if (p_pt > 0.05 || p_bg > 0.05) {
+        autocorr_pdmaxD$Status_Final[linha] <- "5%"
+      } else if (p_pt > 0.10 || p_bg > 0.10) {
+        autocorr_pdmaxD$Status_Final[linha] <- "10%"
+      } else {
+        autocorr_pdmaxD$Status_Final[linha] <- "Autocorrelação"
+      }
+      
+    }, error = function(e) {
+      cat("Erro ao testar o modelo atualizado:", e$message, "\n")
+      autocorr_pdmaxD$Status_Final[linha] <- "ErroNaN"
+    })
+  }
+  
+  cat("\n") # Linha em branco entre modelos
+}
+
+# Para os modelos que não foram reestimados, preencher Status_Final com base no Nao_Rejeita_h0 original
+for (i in 1:nrow(autocorr_pdmaxD)) {
+  if (is.na(autocorr_pdmaxD$Status_Final[i])) {
+    if (autocorr_pdmaxD$Nao_Rejeita_h0[i] == "5%") {
+      autocorr_pdmaxD$Status_Final[i] <- "5%"
+    } else if (autocorr_pdmaxD$Nao_Rejeita_h0[i] == "10%") {
+      autocorr_pdmaxD$Status_Final[i] <- "10%"
+    } else if (grepl("Autocorrelação", autocorr_pdmaxD$Nao_Rejeita_h0[i])) {
+      autocorr_pdmaxD$Status_Final[i] <- "Autocorrelação"
+    }
+  }
+}
+
+# Verificar os resultados
+cat("\n=== Resumo dos resultados ===\n")
+cat("Total de modelos processados:", length(modelos_autocorr), "\n")
+cat("Modelos com autocorrelação persistente:", sum(autocorr_pdmaxD$Status_Final == "Autocorrelação", na.rm = TRUE), "\n")
+cat("Modelos corrigidos a 5%:", sum(autocorr_pdmaxD$Status_Final == "5%", na.rm = TRUE), "\n")
+cat("Modelos corrigidos a 10%:", sum(autocorr_pdmaxD$Status_Final == "10%", na.rm = TRUE), "\n")
+cat("Modelos com erro:", sum(autocorr_pdmaxD$Status_Final == "ErroNaN", na.rm = TRUE), "\n")
+
+```
+
+*Passo 6.2:* Graphical analysis of Serial Autocorrelation
+```{r}
+# Carregue o pacote vars se ainda não estiver
+library(vars)
+
+# Identifica os modelos com Status_Final == "ErroNaN" em autocorr_pdmax
+modelos_erro_nan <- autocorr_pdmaxD$Modelo[autocorr_pdmaxD$Status_Final == "Autocorrelação"]
+
+# Para cada modelo problemático, plota ACF e PACF de cada série residual
+for (nome_modelo in modelos_erro_nan) {
+  cat("\n### Modelo:", nome_modelo, "###\n")
+  
+  # Recupera o objeto VAR estimado
+  mod <- varpdmaxD[[nome_modelo]]
+  if (is.null(mod)) {
+    warning("Modelo ", nome_modelo, " não encontrado em varpdmax. Pulando.")
+    next
+  }
+  
+  # Extrai os resíduos (matriz: observações × variáveis)
+  res <- residuals(mod)
+  
+  # Número de variáveis no VAR
+  nvar <- ncol(res)
+  var_names <- colnames(res)
+  
+  # Para cada variável, plota ACF e PACF lado a lado
+  for (i in seq_len(nvar)) {
+    serie_res <- res[, i]
+    nome_var  <- var_names[i]
+    
+    # Ajusta o layout: 1 linha × 2 colunas
+    par(mfrow = c(1, 2), 
+        mar   = c(5, 4, 4, 2) + 0.1)  # Aumenta as margens para acomodar o título
+    
+    # Plot ACF
+    acf(serie_res,
+        lag.max = 20,
+        main    = paste("ACF dos resíduos\n", nome_modelo, "-", nome_var),
+        xlab    = "Lag")
+    
+    # Plot PACF
+    pacf(serie_res,
+         lag.max = 20,
+         main    = paste("PACF dos resíduos\n", nome_modelo, "-", nome_var),
+         xlab    = "Lag")
+  }
+}
+
+# Restaura layout padrão (1×1)
+par(mfrow = c(1, 1))
+
+```
+
+*Passo 6.3:* Removendo os modelos com autocorrelação serial
+
+```{r}
+# Identificar modelos com autocorrelação
+modelos_autocorr <- autocorr_pdmaxD$Modelo[autocorr_pdmaxD$Status_Final == "Autocorrelação"]
+
+# Criar a nova lista removendo os modelos com autocorrelação
+varpdmax <- varpdmaxD[!names(varpdmaxD) %in% modelos_autocorr]
+
+# Imprimir o número de modelos removidos
+cat("Número de modelos removidos:", length(varpdmax), "\n")
+
+# Imprimir o tamanho da nova lista
+cat("Tamanho da nova lista varpdmax:", length(varpdmax), "\n")
+```
+
+### Granger 
+
+*Passo 7:* Granger-Causality Test 
+
+Simple Logic
+
+```{r}
+summary(varpdmax[["H1: CREDT vs Poup2004"]])
+summary(varpdmax[["H1: CREDD vs Poup2007"]])
+causalitymodel1 <- varpdmax[["H1: CREDT vs Poup2004"]]
+causalitymodel2 <- varpdmax[["H1: CREDD vs Poup2007"]]
+
+vars::causality(causalitymodel1, cause = "Poup2004")
+vars::causality(causalitymodel2, cause = "Poup2007")
+
+```
+
+Full Test
+
+```{r}
+# Carrega as bibliotecas necessárias
+library(vars)
+library(urca)  # Para testes de raiz unitária, se necessário
+
+# Cria um dataframe vazio para armazenar os resultados
+granger <- data.frame(
+  Modelo = character(),
+  Hipotese = character(),
+  Variavel_Causa = character(),
+  Variavel_Efeito = character(),
+  Teste = character(),
+  Estatistica = numeric(),
+  p_value = numeric(),
+  df = numeric(),
+  Lag_VAR = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Função para extrair informações e aplicar teste de causalidade
+testar_causalidade_granger <- function(modelo_var, nome_modelo) {
+  
+  # Extrai as variáveis endógenas
+  variaveis <- colnames(modelo_var$y)
+  var1 <- variaveis[1]
+  var2 <- variaveis[2]
+  
+  # Extrai a hipótese (H1, H2 ou H3)
+  hipotese <- substr(nome_modelo, 1, 2)
+  
+  # Lag do modelo
+  lag_var <- modelo_var$p
+  
+  cat("\n", rep("=", 60), "\n", sep = "")
+  cat("Testando modelo:", nome_modelo, "\n")
+  cat("Variáveis:", var1, "vs", var2, "\n")
+  cat("Lag VAR:", lag_var, "\n")
+  
+  # Teste 1: var1 causa var2
+  tryCatch({
+    test1 <- causality(modelo_var, cause = var1)
+    
+    if (!is.null(test1$Granger)) {
+      granger <<- rbind(granger, data.frame(
+        Modelo = nome_modelo,
+        Hipotese = hipotese,
+        Variavel_Causa = var1,
+        Variavel_Efeito = var2,
+        Teste = "Granger",
+        Estatistica = test1$Granger$statistic,
+        p_value = test1$Granger$p.value,
+        df = test1$Granger$parameter[1],
+        Lag_VAR = lag_var
+      ))
+      
+      cat("\nTeste Granger:", var1, "→", var2, "\n")
+      cat("F-statistic:", round(test1$Granger$statistic, 4), 
+          "| p-value:", round(test1$Granger$p.value, 4), "\n")
+    }
+    
+  }, error = function(e) {
+    cat("ERRO no teste", var1, "→", var2, ":", e$message, "\n")
+  })
+  
+  # Teste 2: var2 causa var1
+  tryCatch({
+    test2 <- causality(modelo_var, cause = var2)
+    
+    if (!is.null(test2$Granger)) {
+      granger <<- rbind(granger, data.frame(
+        Modelo = nome_modelo,
+        Hipotese = hipotese,
+        Variavel_Causa = var2,
+        Variavel_Efeito = var1,
+        Teste = "Granger",
+        Estatistica = test2$Granger$statistic,
+        p_value = test2$Granger$p.value,
+        df = test2$Granger$parameter[1],
+        Lag_VAR = lag_var
+      ))
+      
+      cat("\nTeste Granger:", var2, "→", var1, "\n")
+      cat("F-statistic:", round(test2$Granger$statistic, 4), 
+          "| p-value:", round(test2$Granger$p.value, 4), "\n")
+    }
+    
+  }, error = function(e) {
+    cat("ERRO no teste", var2, "→", var1, ":", e$message, "\n")
+  })
+}
+
+# Aplica o teste para todos os modelos em varpdmax
+cat("\n========== TESTE DE CAUSALIDADE DE GRANGER ==========\n")
+cat("Total de modelos a testar:", length(varpdmax), "\n")
+
+# Loop através de todos os modelos
+contador <- 0
+for (nome_modelo in names(varpdmax)) {
+  contador <- contador + 1
+  cat("\n[", contador, "/", length(varpdmax), "] ", sep = "")
+  
+  modelo <- varpdmax[[nome_modelo]]
+  testar_causalidade_granger(modelo, nome_modelo)
+}
+
+# Resumo dos resultados
+cat("\n\n========== RESUMO DOS RESULTADOS ==========\n")
+cat("Total de testes realizados:", nrow(granger), "\n")
+
+# Adiciona coluna de significância
+granger$Causalidade_5 <- ifelse(granger$p_value < 0.05, "CAUSA", "NÃO CAUSA")
+granger$Causalidade_10 <- ifelse(granger$p_value < 0.10, "CAUSA", "NÃO CAUSA")
+```
+
+### Heteroskedasticity 
+
+*Passo 8:* Heteroskedasticity
+
+Arch Test 
+
+```{r}
+library(vars)
+library(purrr)
+library(dplyr)
+
+heter <- imap_dfr(varpdmax, ~ {
+  t <- arch.test(.x, lags.multi = 4)$arch.mul
+  
+  tibble(
+    modelo  = .y,
+    chi2    = unname(t$statistic),
+    df      = unname(t$parameter),
+    p_value = unname(t$p.value)
+  )
+}) %>%
+  # 1) extraindo "H1", "H2" ou "H3" do início do nome
+  mutate(
+    hipotese    = substr(modelo, 1, 2),
+    # 2) suas colunas de interpretação a 5% e 10%
+    Resultados5  = if_else(p_value > 0.05,  "5%",  "Heterocedasticidade"),
+    Resultados10 = if_else(p_value > 0.10, "10%", "Heterocedasticidade")
+  ) %>%
+  # 3) para cada hipótese, rankeia do maior p-valor (1) ao menor
+  group_by(hipotese) %>%
+  mutate(
+    Ranking = dense_rank(desc(p_value))
+  ) %>%
+  ungroup()
+
+print(heter)
+
+```
+
+### Stability
+
+*Passo 9:* OLS-CUSUM
+
+```{r}
+library(strucchange)
+library(purrr)
+library(dplyr)
+
+# percorre cada modelo na lista varpdmax
+stability <- imap_dfr(varpdmax, function(var_model, model_name) {
+  
+  # roda o stability() para este VAR
+  stab <- stability(var_model, type = "OLS-CUSUM")
+  
+  # para cada equação (cada variável) dentro de stab$stability
+  imap_dfr(stab$stability, function(efp_obj, var_name) {
+    teste <- sctest(efp_obj, type = "OLS-CUSUM")
+    
+    tibble(
+      modelo      = model_name,
+      variavel    = var_name,
+      stat_CUSUM  = as.numeric(teste$statistic),
+      p_value     = as.numeric(teste$p.value),
+      decisao     = if_else(
+                       p_value < 0.05,
+                       "Rejeita H0 → instabilidade",
+                       "Não rejeita H0 → estável"
+                     )
+    )
+  })
+})
+
+print(stability)
+
+
+```
+
+### Filter
+
+*Passo 10:* Filter
+
+```{r}
+library(openxlsx)
+write.xlsx(stability,"stability.xlsx")
+write.xlsx(heter, "heter.xlsx")
+write.xlsx(granger, "granger.xlsx")
+```
+
+78 | Modelos que não possuem heterocedasticidade
+
+```{r}
+# Identifica os nomes dos modelos que passaram no teste a 5%
+semheter <- heter$modelo[heter$Resultados5 == "5%"]
+
+# Filtra a lista original varpdmax:
+# A ideia é selecionar os elementos de varpdmax cujos nomes estão na lista de aprovados
+varxj <- varpdmax[names(varpdmax) %in% semheter]
+```
+
+Excel
+```{r}
+varxjnomes <- names(varxj)
+write.xlsx(varxjnomes,"varxjnomes")
+```
+
+### Johansen
+
+*Passo 11:* Cointegration - Johansen
+
+Todos os modelos
+
+```{r}
+# Pacotes necessários
+library(vars)
+library(urca)
+
+# Inicializa lista de resultados
+res_list <- vector("list", length(varxj))
+model_names <- names(varxj)
+
+# Função para interpretar a rejeição da H0
+interpret_rejection <- function(rejection) {
+  if (rejection) {
+    return("Cointegração!")
+  } else {
+    return("NC")
+  }
+}
+
+# Loop em cada modelo de varxj
+for(i in seq_along(varxj)) {
+  # Extrai VAR
+  modelo  <- varxj[[i]]
+  endog   <- modelo$y
+  lag_p   <- modelo$p
+
+  # Trace test
+  joh_trace <- ca.jo(endog, type = "trace", ecdet = "const", K = lag_p)
+  # Max eigenvalue
+  joh_eigen <- ca.jo(endog, type = "eigen", ecdet = "const", K = lag_p)
+
+  # Estatísticas e valores críticos para r = 0
+  # Ajustamos os índices para usar números em vez de strings
+  trace_stat  <- joh_trace@teststat[1]  # Primeiro elemento corresponde a r = 0
+  trace_c5    <- joh_trace@cval[1, "5pct"]  # Primeira linha, coluna "5pct"
+  eigen_stat  <- joh_eigen@teststat[1]
+  eigen_c5    <- joh_eigen@cval[1, "5pct"]
+
+  # Decisão de rejeitar H0: r = 0 ao nível de 5%
+  trace_rej  <- trace_stat  > trace_c5
+  eigen_rej  <- eigen_stat  > eigen_c5
+
+  # Interpretar decisão de rejeição
+  trace_interpreter <- interpret_rejection(trace_rej)
+  eigen_interpreter <- interpret_rejection(eigen_rej)
+
+  # Armazena num data.frame temporário
+  res_list[[i]] <- data.frame(
+    Model            = model_names[i],
+    Trace_Stat_r0    = as.numeric(trace_stat),
+    Trace_Crit5_r0   = as.numeric(trace_c5),
+   Trace_Interpret = trace_interpreter,
+    Eigen_Stat_r0    = as.numeric(eigen_stat),
+    Eigen_Crit5_r0   = as.numeric(eigen_c5),
+    Eigen_Interpret = eigen_interpreter,
+    stringsAsFactors = FALSE
+  )
+}
+
+# Combina tudo num único data.frame
+johansen <- do.call(rbind, res_list)
+
+# Visualize resultado
+print(johansen)
+
+# Visualizar apenas as colunas de interesse
+print(johansen[,c("Model", "Trace_Interpret", "Eigen_Interpret")])
+
+```
+
+## ⚠️ Disclaimer IRF/FEVD
+
+As seções abaixo de impulse-funciton e decomposição de variância não foram incluídos no TCC, devido uma falta de adaptação no código para o método de Granger via T-Y. As seções serão atualizadas em breve. 
+
+### OIRF
+
+
+#### H2
+
+```{r}
+library(vars)
+# 1) extraia o seu modelo
+mod <- varxj[["H2: M2_processado vs S2_processado"]]
+
+# 2) recupere e corrija o call
+cl <- mod$call
+
+# já tínhamos feito:
+ cl[["p"]]             <- mod$p
+ cl[["lag_adicional"]] <- NULL
+
+# agora corrija também as exógenas:
+cl[["exogen"]] <- mod$exogen
+
+# reatribua o call consertado ao modelo
+mod$call <- cl
+
+# 3) rode a IRF normalmente
+irf_H3 <- irf(
+  x        = mod,
+  impulse  = "M2_processado",
+  response = "S2_processado",
+  n.ahead  = 12,
+  ortho    = TRUE,
+  boot     = TRUE,
+  ci       = 0.95,
+  runs     = 200,
+  seed     = 123
+)
+plot(irf_H3)
+
+
+# 1) Abra o dispositivo gráfico PNG, definindo dimensões e resolução
+png(
+  filename = "irf_M2_to_S2.png",   # nome do arquivo de saída
+  width    = 20,                   # largura
+  height   = 16,                   # altura
+  units    = "in",                 # unidades em polegadas (inches)
+  res      = 300,                  # dpi
+  bg       = "white"               # fundo branco
+)
+
+# 2) Desenha o IRF no dispositivo aberto
+plot(irf_H3)
+
+# 3) Fecha o dispositivo e grava o arquivo
+dev.off()
+
+
+
+```
+
+Plot personalizado
+
+```{r}
+library(ggplot2)
+
+# 1) Monte o irfdf
+h <- seq_len(nrow(irf_H3$irf$M2_processado))
+irfdf <- data.frame(
+  h      = h,
+  irf    = irf_H3$irf$M2_processado[, "S2_processado"],
+  lower  = irf_H3$Lower$M2_processado[, "S2_processado"],
+  upper  = irf_H3$Upper$M2_processado[, "S2_processado"]
+)
+
+# 2) Suavização
+spline_fit           <- stats::smooth.spline(x = irfdf$h, y = irfdf$irf, spar = 0)
+irfdf$irf_smooth     <- stats::predict(spline_fit, x = irfdf$h)$y
+
+# 3) Construa o gráfico com eixos customizados
+irf_plot <- ggplot(irfdf, aes(x = h)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper),
+              fill  = "grey90", color = NA) +
+  geom_line(aes(y = irf_smooth),
+            color = "blue", size = 1) +
+  scale_x_continuous(
+    breaks       = seq(min(irfdf$h), max(irfdf$h), by = 1),
+    minor_breaks = seq(min(irfdf$h), max(irfdf$h), by = 0.5),
+    expand       = c(0, 0)
+  ) +
+  scale_y_continuous(
+    breaks = seq(
+      from = -0.005,
+      to   = ceiling(max(irfdf$upper) / 0.0025) * 0.0025,
+      by   = 0.0025
+    ),
+    # remove zeros à direita para não mostrar sempre 4 casas
+    labels = function(x) sub("\\.?0+$", "", sprintf("%.4f", x)),
+    expand = c(0, 0)
+  ) +
+  labs(
+    title   = "IRF: M2_processado → S2_processado",
+    x       = "Horizonte (trimestres)",
+    y       = "Resposta ao impulso",
+    caption = "95% Bootstrapped CI, 200 runs"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title   = element_text(size = 25, face = "bold"),
+    axis.title   = element_text(size = 25),
+    axis.text    = element_text(size = 25),
+    plot.caption = element_text(size = 25, hjust = 0),
+    panel.grid   = element_line(colour = "grey92"),
+    panel.border = element_blank()
+  )
+
+# 4) Salve em PNG de alta resolução
+ggsave(
+  filename = "irf_M2_to_S2_highres.png",
+  plot     = irf_plot,
+  width    = 18,      # largura em polegadas
+  height   = 13,      # altura em polegadas
+  units    = "in",    
+  dpi      = 300,     
+  bg       = "white"  
+)
+
+```
+
+#### H3
+
+Modelos que validam TACE:
+
+```{r}
+modelos_h3 <- c(
+  "H3: S1_processado vs IND4_processado",
+  "H3: S1_processado vs IND5_processado",
+  "H3: S1_processado vs IND7_processado",
+  "H3: S2_processado vs IND1_processado",
+  "H3: S2_processado vs IND2_processado",
+  "H3: S2_processado vs IND3_processado",
+  "H3: S2_processado vs IND4_processado",
+  "H3: S2_processado vs IND5_processado",
+  "H3: S2_processado vs IND7_processado",
+  "H3: S3_processado vs IND4_processado",
+  "H3: S3_processado vs IND5_processado",
+  "H3: S3_processado vs IND7_processado",
+  "H3: S4_processado vs IND1_processado",
+  "H3: S4_processado vs IND2_processado",
+  "H3: S4_processado vs IND3_processado",
+  "H3: S4_processado vs IND4_processado",
+  "H3: S4_processado vs IND5_processado",
+  "H3: S4_processado vs IND7_processado",
+  "H3: S2_processado vs UCAP_processado",
+  "H3: M1_processado vs IND2_processado",
+  "H3: M1_processado vs IND4_processado",
+  "H3: M1_processado vs IND6_processado",
+  "H3: M1_processado vs IND7_processado",
+  "H3: M2_processado vs IND6_processado",
+  "H3: DV_processado vs IND2_processado",
+  "H3: DV_processado vs IND3_processado",
+  "H3: DV_processado vs IND4_processado",
+  "H3: DV_processado vs IND7_processado",
+  "H3: M1_processado vs UCAP_processado",
+  "H3: DV_processado vs UCAP_processado"
+)
+```
+
+```{r}
+library(vars)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+
+# Lista de modelos H3
+modelos_h3 <- c(
+  "H3: S1_processado vs IND4_processado",
+  "H3: S1_processado vs IND5_processado",
+  "H3: S1_processado vs IND7_processado",
+  "H3: S2_processado vs IND1_processado",
+  "H3: S2_processado vs IND2_processado",
+  "H3: S2_processado vs IND3_processado",
+  "H3: S2_processado vs IND4_processado",
+  "H3: S2_processado vs IND5_processado",
+  "H3: S2_processado vs IND7_processado",
+  "H3: S3_processado vs IND4_processado",
+  "H3: S3_processado vs IND5_processado",
+  "H3: S3_processado vs IND7_processado",
+  "H3: S4_processado vs IND1_processado",
+  "H3: S4_processado vs IND2_processado",
+  "H3: S4_processado vs IND3_processado",
+  "H3: S4_processado vs IND4_processado",
+  "H3: S4_processado vs IND5_processado",
+  "H3: S4_processado vs IND7_processado",
+  "H3: S2_processado vs UCAP_processado",
+  "H3: M1_processado vs IND2_processado",
+  "H3: M1_processado vs IND4_processado",
+  "H3: M1_processado vs IND6_processado",
+  "H3: M1_processado vs IND7_processado",
+  "H3: M2_processado vs IND6_processado",
+  "H3: DV_processado vs IND2_processado",
+  "H3: DV_processado vs IND3_processado",
+  "H3: DV_processado vs IND4_processado",
+  "H3: DV_processado vs IND7_processado",
+  "H3: M1_processado vs UCAP_processado",
+  "H3: DV_processado vs UCAP_processado"
+)
+
+# Função para gerar um gráfico IRF individual
+gerar_irf_plot <- function(modelo_nome, varxj_obj) {
+  
+  # Extrair nomes das variáveis do título
+  vars <- strsplit(modelo_nome, " vs ")[[1]]
+  impulse_var <- gsub("H3: ", "", vars[1])
+  response_var <- vars[2]
+  
+  # 1) Extrair o modelo
+  mod <- varxj_obj[[modelo_nome]]
+  
+  # 2) Corrigir o call com verificações adequadas
+  cl <- mod$call
+  cl[["p"]] <- mod$p
+  
+  # Remover qualquer parâmetro de lag que existir
+  if("lag_adicional" %in% names(cl)) {
+    cl[["lag_adicional"]] <- NULL
+  }
+  if("lag_para_estimacao" %in% names(cl)) {
+    cl[["lag_para_estimacao"]] <- NULL
+  }
+  
+  # Corrigir exógenas - só modificar se o slot existir
+  if("exogen" %in% names(cl)) {
+    # O slot existe no call, vamos atualizá-lo
+    if("exogen" %in% names(mod)) {
+      cl[["exogen"]] <- mod$exogen
+    } else if("datamat" %in% names(mod) && !is.null(mod$datamat$exogen)) {
+      cl[["exogen"]] <- mod$datamat$exogen
+    } else {
+      # Se o slot existe mas não encontramos dados, remover
+      cl[["exogen"]] <- NULL
+    }
+  }
+  # Se o slot não existe, não fazemos nada (modelo sem exógenas)
+  
+  mod$call <- cl
+  
+  # 3) Rodar a IRF
+  tryCatch({
+    irf_result <- irf(
+      x        = mod,
+      impulse  = impulse_var,
+      response = response_var,
+      n.ahead  = 12,
+      ortho    = TRUE,
+      boot     = TRUE,
+      ci       = 0.95,
+      runs     = 200,
+      seed     = 123
+    )
+    
+    # 4) Montar o dataframe
+    h <- seq_len(nrow(irf_result$irf[[impulse_var]]))
+    irfdf <- data.frame(
+      h      = h,
+      irf    = irf_result$irf[[impulse_var]][, response_var],
+      lower  = irf_result$Lower[[impulse_var]][, response_var],
+      upper  = irf_result$Upper[[impulse_var]][, response_var]
+    )
+    
+    # 5) Suavização
+    spline_fit <- stats::smooth.spline(x = irfdf$h, y = irfdf$irf, spar = 0)
+    irfdf$irf_smooth <- stats::predict(spline_fit, x = irfdf$h)$y
+    
+    # 6) Criar o gráfico
+    p <- ggplot(irfdf, aes(x = h)) +
+      geom_ribbon(aes(ymin = lower, ymax = upper),
+                  fill = "grey90", color = NA) +
+      geom_line(aes(y = irf_smooth),
+                color = "blue", size = 0.8) +
+      scale_x_continuous(
+        breaks = seq(min(irfdf$h), max(irfdf$h), by = 2),
+        expand = c(0, 0)
+      ) +
+      scale_y_continuous(
+        labels = function(x) sub("\\.?0+$", "", sprintf("%.4f", x)),
+        expand = c(0.05, 0.05)
+      ) +
+      labs(
+        title = paste0(impulse_var, " → ", response_var),
+        x = "Horizonte",
+        y = "Resposta"
+      ) +
+      theme_minimal() +
+      theme(
+        # ALTERAÇÃO: Aumentando tamanhos dos elementos do gráfico
+        plot.title   = element_text(size = 14, face = "bold"),  # Era 10, agora 14
+        axis.title   = element_text(size = 12),                 # Era 8, agora 12  
+        axis.text    = element_text(size = 10),                 # Era 7, agora 10
+        panel.grid   = element_line(colour = "grey92"),
+        panel.border = element_blank(),
+        plot.margin  = margin(5, 5, 5, 5)
+      )
+    
+    return(p)
+    
+  }, error = function(e) {
+    # Se houver erro, retornar um gráfico vazio com mensagem detalhada
+    ggplot() + 
+      annotate("text", x = 0.5, y = 0.5, 
+               label = paste("Erro em:\n", modelo_nome, "\n", 
+                           substr(e$message, 1, 50)),
+               size = 3) +
+      theme_void()
+  })
+}
+
+# Gerar lista de gráficos
+lista_plots <- lapply(modelos_h3, function(modelo) {
+  print(paste("Processando:", modelo))  # Para debug
+  gerar_irf_plot(modelo, varxj)
+})
+
+# ALTERAÇÃO: Mudando de 5 para 4 colunas
+# Página 1: primeiros 16 gráficos (4x4)
+painel_p1 <- wrap_plots(lista_plots[1:16], ncol = 4, nrow = 4)
+
+# Página 2: últimos 14 gráficos (4x4, com espaços vazios)
+painel_p2 <- wrap_plots(lista_plots[17:30], ncol = 4, nrow = 4)
+
+# Adicionar títulos gerais
+painel_p1_final <- painel_p1 + 
+  plot_annotation(
+    title = "Funções de Impulso-Resposta H3 (Parte 1/2)",
+    subtitle = "Horizonte: 12 trimestres | 95% CI Bootstrap (200 runs)",
+    theme = theme(
+      plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5)
+    )
+  )
+
+painel_p2_final <- painel_p2 + 
+  plot_annotation(
+    title = "Funções de Impulso-Resposta H3 (Parte 2/2)",
+    subtitle = "Horizonte: 12 trimestres | 95% CI Bootstrap (200 runs)",
+    theme = theme(
+      plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5)
+    )
+  )
+
+# Salvar em alta resolução
+ggsave("irf_h3_painel_parte1.png", 
+       plot = painel_p1_final, 
+       width = 20, 
+       height = 16,    # Ajustado para 4x4
+       dpi = 300,
+       bg = "white")
+
+ggsave("irf_h3_painel_parte2.png", 
+       plot = painel_p2_final, 
+       width = 20, 
+       height = 16,    # Ajustado para 4x4
+       dpi = 300,
+       bg = "white")
+
+# Alternativa: Salvar todos os 30 em uma única imagem (mantendo 6x5)
+painel_completo <- wrap_plots(lista_plots, ncol = 5, nrow = 6) +
+  plot_annotation(
+    title = "Funções de Impulso-Resposta H3 - Painel Completo",
+    subtitle = "30 modelos | Horizonte: 12 trimestres | 95% CI Bootstrap (200 runs)",
+    theme = theme(
+      plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5)
+    )
+  )
+
+ggsave("irf_h3_painel_completo.png", 
+       plot = painel_completo, 
+       width = 25, 
+       height = 30, 
+       dpi = 300,
+       bg = "white")
+
+```
+
+### IRF 
+
+#### H2 
+
+```{r}
+library(vars)
+# 1) extraia o seu modelo
+mod <- varxj[["H2: M2_processado vs S2_processado"]]
+
+# 2) recupere e corrija o call
+cl <- mod$call
+
+# já tínhamos feito:
+ cl[["p"]]             <- mod$p
+ cl[["lag_adicional"]] <- NULL
+
+# agora corrija também as exógenas:
+cl[["exogen"]] <- mod$exogen
+
+# reatribua o call consertado ao modelo
+mod$call <- cl
+
+# 3) rode a IRF normalmente
+irf_H3 <- irf(
+  x        = mod,
+  impulse  = "M2_processado",
+  response = "S2_processado",
+  n.ahead  = 12,
+  ortho    = FALSE,
+  boot     = TRUE,
+  ci       = 0.95,
+  runs     = 200,
+  seed     = 123
+)
+plot(irf_H3)
+
+
+# 1) Abra o dispositivo gráfico PNG, definindo dimensões e resolução
+png(
+  filename = "irf_M2_to_S2.png",   # nome do arquivo de saída
+  width    = 20,                   # largura
+  height   = 16,                   # altura
+  units    = "in",                 # unidades em polegadas (inches)
+  res      = 300,                  # dpi
+  bg       = "white"               # fundo branco
+)
+
+# 2) Desenha o IRF no dispositivo aberto
+plot(irf_H3)
+
+# 3) Fecha o dispositivo e grava o arquivo
+dev.off()
+
+
+
+```
+
+Plot personalizado
+
+```{r}
+library(ggplot2)
+# 1) Monte o irfdf
+h <- seq_len(nrow(irf_H3$irf$M2_processado))
+irfdf <- data.frame(
+  h      = h,
+  irf    = irf_H3$irf$M2_processado[, "S2_processado"],
+  lower  = irf_H3$Lower$M2_processado[, "S2_processado"],
+  upper  = irf_H3$Upper$M2_processado[, "S2_processado"]
+)
+# 2) Suavização
+spline_fit           <- stats::smooth.spline(x = irfdf$h, y = irfdf$irf, spar = 0)
+irfdf$irf_smooth     <- stats::predict(spline_fit, x = irfdf$h)$y
+# 3) Construa o gráfico com eixos customizados
+irf_plot <- ggplot(irfdf, aes(x = h)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper),
+              fill  = "grey90", color = NA) +
+  geom_line(aes(y = irf_smooth),
+            color = "blue", size = 1) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed", size = 1) +
+  scale_x_continuous(
+    breaks       = seq(min(irfdf$h), max(irfdf$h), by = 1),
+    minor_breaks = seq(min(irfdf$h), max(irfdf$h), by = 0.5),
+    expand       = c(0, 0)
+  ) +
+  scale_y_continuous(
+    expand = c(0, 0)
+  ) +
+  labs(
+    title   = "IRF: M2_processado → S2_processado",
+    x       = "Horizonte (trimestres)",
+    y       = "Resposta ao impulso",
+    caption = "95% Bootstrapped CI, 200 runs"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title   = element_text(size = 25, face = "bold"),
+    axis.title   = element_text(size = 25),
+    axis.text    = element_text(size = 25),
+    plot.caption = element_text(size = 25, hjust = 0),
+    panel.grid   = element_line(colour = "grey92"),
+    panel.border = element_blank()
+  )
+# 4) Salve em PNG de alta resolução
+ggsave(
+  filename = "irf_M2_to_S2_highres.png",
+  plot     = irf_plot,
+  width    = 18,      # largura em polegadas
+  height   = 13,      # altura em polegadas
+  units    = "in",    
+  dpi      = 300,     
+  bg       = "white"  
+)
+```
+
+#### H3
+
+```{r}
+library(vars)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+
+# Lista de modelos H3
+modelos_h3 <- c(
+  "H3: S1_processado vs IND4_processado",
+  "H3: S1_processado vs IND5_processado",
+  "H3: S1_processado vs IND7_processado",
+  "H3: S2_processado vs IND1_processado",
+  "H3: S2_processado vs IND2_processado",
+  "H3: S2_processado vs IND3_processado",
+  "H3: S2_processado vs IND4_processado",
+  "H3: S2_processado vs IND5_processado",
+  "H3: S2_processado vs IND7_processado",
+  "H3: S3_processado vs IND4_processado",
+  "H3: S3_processado vs IND5_processado",
+  "H3: S3_processado vs IND7_processado",
+  "H3: S4_processado vs IND1_processado",
+  "H3: S4_processado vs IND2_processado",
+  "H3: S4_processado vs IND3_processado",
+  "H3: S4_processado vs IND4_processado",
+  "H3: S4_processado vs IND5_processado",
+  "H3: S4_processado vs IND7_processado",
+  "H3: S2_processado vs UCAP_processado",
+  "H3: M1_processado vs IND2_processado",
+  "H3: M1_processado vs IND4_processado",
+  "H3: M1_processado vs IND6_processado",
+  "H3: M1_processado vs IND7_processado",
+  "H3: M2_processado vs IND6_processado",
+  "H3: DV_processado vs IND2_processado",
+  "H3: DV_processado vs IND3_processado",
+  "H3: DV_processado vs IND4_processado",
+  "H3: DV_processado vs IND7_processado",
+  "H3: M1_processado vs UCAP_processado",
+  "H3: DV_processado vs UCAP_processado"
+)
+
+# Função para gerar um gráfico IRF individual
+gerar_irf_plot <- function(modelo_nome, varxj_obj) {
+  
+  # Extrair nomes das variáveis do título
+  vars <- strsplit(modelo_nome, " vs ")[[1]]
+  impulse_var <- gsub("H3: ", "", vars[1])
+  response_var <- vars[2]
+  
+  # 1) Extrair o modelo
+  mod <- varxj_obj[[modelo_nome]]
+  
+  # 2) Corrigir o call com verificações adequadas
+  cl <- mod$call
+  cl[["p"]] <- mod$p
+  
+  # Remover qualquer parâmetro de lag que existir
+  if("lag_adicional" %in% names(cl)) {
+    cl[["lag_adicional"]] <- NULL
+  }
+  if("lag_para_estimacao" %in% names(cl)) {
+    cl[["lag_para_estimacao"]] <- NULL
+  }
+  
+  # Corrigir exógenas - só modificar se o slot existir
+  if("exogen" %in% names(cl)) {
+    # O slot existe no call, vamos atualizá-lo
+    if("exogen" %in% names(mod)) {
+      cl[["exogen"]] <- mod$exogen
+    } else if("datamat" %in% names(mod) && !is.null(mod$datamat$exogen)) {
+      cl[["exogen"]] <- mod$datamat$exogen
+    } else {
+      # Se o slot existe mas não encontramos dados, remover
+      cl[["exogen"]] <- NULL
+    }
+  }
+  # Se o slot não existe, não fazemos nada (modelo sem exógenas)
+  
+  mod$call <- cl
+  
+  # 3) Rodar a IRF
+  tryCatch({
+    irf_result <- irf(
+      x        = mod,
+      impulse  = impulse_var,
+      response = response_var,
+      n.ahead  = 12,
+      ortho    = FALSE,
+      boot     = TRUE,
+      ci       = 0.95,
+      runs     = 200,
+      seed     = 123
+    )
+    
+    # 4) Montar o dataframe
+    h <- seq_len(nrow(irf_result$irf[[impulse_var]]))
+    irfdf <- data.frame(
+      h      = h,
+      irf    = irf_result$irf[[impulse_var]][, response_var],
+      lower  = irf_result$Lower[[impulse_var]][, response_var],
+      upper  = irf_result$Upper[[impulse_var]][, response_var]
+    )
+    
+    # 5) Suavização
+    spline_fit <- stats::smooth.spline(x = irfdf$h, y = irfdf$irf, spar = 0)
+    irfdf$irf_smooth <- stats::predict(spline_fit, x = irfdf$h)$y
+    
+    # 6) Criar o gráfico
+    p <- ggplot(irfdf, aes(x = h)) +
+      geom_ribbon(aes(ymin = lower, ymax = upper),
+                  fill = "grey90", color = NA) +
+      geom_line(aes(y = irf_smooth),
+                color = "blue", size = 0.8) +
+      scale_x_continuous(
+        breaks = seq(min(irfdf$h), max(irfdf$h), by = 2),
+        expand = c(0, 0)
+      ) +
+      scale_y_continuous(
+        labels = function(x) sub("\\.?0+$", "", sprintf("%.4f", x)),
+        expand = c(0.05, 0.05)
+      ) +
+      labs(
+        title = paste0(impulse_var, " → ", response_var),
+        x = "Horizonte",
+        y = "Resposta"
+      ) +
+      theme_minimal() +
+      theme(
+        # ALTERAÇÃO: Aumentando tamanhos dos elementos do gráfico
+        plot.title   = element_text(size = 14, face = "bold"),  # Era 10, agora 14
+        axis.title   = element_text(size = 12),                 # Era 8, agora 12  
+        axis.text    = element_text(size = 10),                 # Era 7, agora 10
+        panel.grid   = element_line(colour = "grey92"),
+        panel.border = element_blank(),
+        plot.margin  = margin(5, 5, 5, 5)
+      )
+    
+    return(p)
+    
+  }, error = function(e) {
+    # Se houver erro, retornar um gráfico vazio com mensagem detalhada
+    ggplot() + 
+      annotate("text", x = 0.5, y = 0.5, 
+               label = paste("Erro em:\n", modelo_nome, "\n", 
+                           substr(e$message, 1, 50)),
+               size = 3) +
+      theme_void()
+  })
+}
+
+# Gerar lista de gráficos
+lista_plots <- lapply(modelos_h3, function(modelo) {
+  print(paste("Processando:", modelo))  # Para debug
+  gerar_irf_plot(modelo, varxj)
+})
+
+# ALTERAÇÃO: Mudando de 5 para 4 colunas
+# Página 1: primeiros 16 gráficos (4x4)
+painel_p1 <- wrap_plots(lista_plots[1:16], ncol = 4, nrow = 4)
+
+# Página 2: últimos 14 gráficos (4x4, com espaços vazios)
+painel_p2 <- wrap_plots(lista_plots[17:30], ncol = 4, nrow = 4)
+
+# Adicionar títulos gerais
+painel_p1_final <- painel_p1 + 
+  plot_annotation(
+    title = "Funções de Impulso-Resposta H3 (Parte 1/2)",
+    subtitle = "Horizonte: 12 trimestres | 95% CI Bootstrap (200 runs)",
+    theme = theme(
+      plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5)
+    )
+  )
+
+painel_p2_final <- painel_p2 + 
+  plot_annotation(
+    title = "Funções de Impulso-Resposta H3 (Parte 2/2)",
+    subtitle = "Horizonte: 12 trimestres | 95% CI Bootstrap (200 runs)",
+    theme = theme(
+      plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5)
+    )
+  )
+
+# Salvar em alta resolução
+ggsave("irf_h3_painel_parte1.png", 
+       plot = painel_p1_final, 
+       width = 20, 
+       height = 16,    # Ajustado para 4x4
+       dpi = 300,
+       bg = "white")
+
+ggsave("irf_h3_painel_parte2.png", 
+       plot = painel_p2_final, 
+       width = 20, 
+       height = 16,    # Ajustado para 4x4
+       dpi = 300,
+       bg = "white")
+
+# Alternativa: Salvar todos os 30 em uma única imagem (mantendo 6x5)
+painel_completo <- wrap_plots(lista_plots, ncol = 5, nrow = 6) +
+  plot_annotation(
+    title = "Funções de Impulso-Resposta H3 - Painel Completo",
+    subtitle = "30 modelos | Horizonte: 12 trimestres | 95% CI Bootstrap (200 runs)",
+    theme = theme(
+      plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5)
+    )
+  )
+
+ggsave("irf_h3_painel_completo.png", 
+       plot = painel_completo, 
+       width = 25, 
+       height = 30, 
+       dpi = 300,
+       bg = "white")
+
+```
+
+### FEVD [Pendente]
+
+#### H2
+```{r}
+
+```
+
+#### H3
+```{r}
+
+```
+
+#_________
+
+#  6 Tables
+
+## Unit Roots
+
+```{r}
+library(openxlsx)
+
+# Adiciona uma coluna com os nomes das linhas
+unitroot_class$Series <- rownames(unitroot_class)
+
+# Garante que a coluna com os nomes das séries seja a primeira
+unitroot_class <- unitroot_class[, c("Series", setdiff(names(unitroot_class), "Series"))]
+
+# Salva no arquivo Excel
+write.xlsx(unitroot_class, file = "unitroot_results2.xlsx", rowNames = FALSE)
+
+```
+
+## Lag Selection
+
+```{r}
+library(openxlsx)
+write.xlsx(resultados_lagsD, file = "optimal_lags.xlsx", rowNames = FALSE)
+```
+
+
+## Serial Autocorrelation
+
+```{r}
+install.packages("writexl")   # só na primeira vez
+library(writexl)
+
+write_xlsx(autocorr_pdmaxD, path = "autocorr_pdmaxD.xlsx")
+
+```
+
+## Granger
+
+```{r}
+library(writexl)
+write_xlsx(granger,path = "granger.xlsx")
+```
+
+## Stability
+
+```{r}
+library(writexl)
+write_xlsx(stability,path = "stability.xlsx")
+```
+
+## Heteroskedasticity
+
+```{r}
+library(writexl)
+write_xlsx(heter,path = "heter.xlsx")
+```
+
+## Cointegration
+
+```{r}
+library(writexl)
+write_xlsx(johansen,path = "johansen.xlsx")
+```
+
+
+#_________
+# 7 📊 Graphs 
+
+## H1
+
+```{r}
+# Pacotes Necessários
+
+library(ggplot2)
+library(zoo)
+library(dplyr)
+library(scales)
+
+# converte cada ts em data.frame com coluna de datas (trimestrais) e valor
+poupgraph <- data.frame(
+  date  = as.Date(as.yearqtr(time(Poup2004))),
+  series = "Poup2004",
+  value   = as.numeric(Poup2004)
+)
+
+credtgraph <- data.frame(
+  date  = as.Date(as.yearqtr(time(CREDT_processado))),
+  series = "CREDT_processado",
+  value   = as.numeric(CREDT_processado)
+)
+
+credlgraph <- data.frame(
+  date  = as.Date(as.yearqtr(time(CREDL_processado))),
+  series = "CREDL_processado",
+  value   = as.numeric(CREDL_processado)
+)
+
+creddgraph <- data.frame(
+  date  = as.Date(as.yearqtr(time(CREDD_processado))),
+  series = "CREDD_processado",
+  value   = as.numeric(CREDD_processado)
+)
+
+# empilha tudo
+df_all <- bind_rows(poupgraph, credtgraph, credlgraph, creddgraph)
+
+# 1. define as datas de início/fim da faixa quarternária
+band_start <- as.Date(as.yearqtr("2014 Q1", format = "%Y Q%q"))
+band_end   <- as.Date(as.yearqtr("2015 Q4", format = "%Y Q%q"))
+
+# 2. calcula os breaks do eixo y (de 200k em 200k)
+y_min    <- floor(min(df_all$value, na.rm = TRUE) / 200000) * 200000
+y_max    <- ceiling(max(df_all$value, na.rm = TRUE) / 200000) * 200000
+y_breaks <- seq(y_min, y_max, by = 200000)
+
+# 3. plota
+credxpoup <- ggplot(df_all, aes(x = date, y = value, color = series)) +
+  
+  # faixa vertical cinza clara (colocada antes das linhas, para ficar atrás)
+  annotate(
+    "rect",
+    xmin   = band_start,
+    xmax   = band_end,
+    ymin   = -Inf,
+    ymax   = +Inf,
+    fill   = "#A6A6A6",
+    alpha  = 0.2,
+    color  = NA
+  ) +
+  
+  # linhas das séries
+  geom_line(size = 0.8) +
+  
+  # cores manuais
+  scale_color_manual(
+    name   = "Série",
+    values = c(
+      "CREDT_processado" = "#02023C",
+      "Poup2004"         = "#FEB712",
+      "CREDD_processado" = "#46B1E1",
+      "CREDL_processado" = "#A6A6A6"
+    ),
+    labels = c(
+      "CREDT_processado" = "Crédito Total",
+      "Poup2004"         = "Poupança",
+      "CREDD_processado" = "Crédito Direcionado",
+      "CREDL_processado" = "Crédito Livre"
+    )
+  ) +
+  
+  # eixo x trimestral → anos
+  scale_x_date(
+    date_breaks = "1 year",
+    date_labels = "%y"
+  ) +
+  
+  # eixo y de 200k em 200k
+  scale_y_continuous(
+    breaks = y_breaks,
+    labels = label_comma()
+  ) +
+  
+  labs(
+    x = "Ano",
+    y = "Valor"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position  = "bottom",
+    panel.grid.minor = element_blank()
+  )
+
+
+# Salvando em PNG:
+
+# salva em PNG com 300 dpi, 20×12 cm
+ggsave(
+  filename = "grafico_credito_poupanca.png",
+  plot     = credxpoup,               # ou não especifique para usar o último gráfico
+  device   = "png",
+  width    = 20,
+  height   = 12,
+  units    = "cm",
+  dpi      = 300
+)
+
+```
+
+## H2
+
+Convergência a TACE:
+
+M2 vs S2
+
+```{r}
+# 1) Carregar pacotes
+library(zoo)      # para trabalhar com yearqtr e fortify.zoo
+library(dplyr)    # para mutate, lag e arrange
+library(ggplot2)  # para o gráfico
+library(scales)   # para percent_format()
+
+# 2) Supondo que series_test seja uma lista contendo duas séries temporais
+#    chamadas series_test$S2 e series_test$M2 (ts, zoo ou xts)
+#    Converta ambas para zoo (se já forem zoo/xts, nada muda):
+s2_z <- as.zoo(series_test$S2)
+m2_z <- as.zoo(series_test$M2)
+
+# 3) Junte as duas séries num único objeto zoo
+df_z <- merge(s2_z, m2_z, all = TRUE)
+colnames(df_z) <- c("S2_POUPOVER", "M2")
+
+# 4) Transforme em data.frame com coluna Date
+df <- fortify.zoo(df_z, name = "Date")
+# Se 'Date' veio como yearqtr, converta para Date (primeiro dia do trimestre)
+if (inherits(df$Date, "yearqtr")) {
+  df$Date <- as.Date(df$Date)
+}
+
+# 5) Calcule a variação anual de M2 em porcentagem
+df <- df %>%
+  arrange(Date) %>%
+  mutate(
+    M2_Variation = (M2 / lag(M2, 4) - 1) * 100
+  ) %>%
+  filter(!is.na(M2_Variation))  # remove os primeiros trimestres sem variação
+
+# 6) Determine o fator para escalar S2 ao eixo primário
+fator <- max(df$M2_Variation, na.rm = TRUE) /
+         max(df$S2_POUPOVER,   na.rm = TRUE)
+
+# 7) Construa o gráfico com eixo secundário para S2
+p <- ggplot(df, aes(x = Date)) +
+  geom_line(aes(y = M2_Variation, color = "M2 (Var. Anual)"),
+            size = 1.2) +
+  geom_line(aes(y = S2_POUPOVER * fator, color = "S2_POUPOVER"),
+            size = 1.2) +
+  scale_color_manual(values = c("S2_POUPOVER"     = "#46B1E1",
+                                "M2 (Var. Anual)" = "#02023C")) +
+  scale_x_date(date_breaks = "2 years",
+               date_labels = "%Y",
+               expand = c(0, 0)) +
+  scale_y_continuous(
+    name   = "M2 (Variação Anual) (%)",
+    labels = percent_format(scale = 1, suffix = "%"),
+    sec.axis = sec_axis(
+      transform = ~ . / fator,
+      name  = "S2_POUPOVER (%)",
+      labels = percent_format(scale = 1, suffix = "%")
+    )
+  ) +
+  labs(
+    title    = "M2 (Variação Anual) e S2_POUPOVER",
+    subtitle = "Período: 1Q2005 - 4Q2024",
+    x        = "Período",
+    color    = "",
+    caption  = "Fonte: Elaboração própria"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title        = element_text(size = 14, face = "bold"),
+    plot.subtitle     = element_text(size = 12),
+    axis.title        = element_text(size = 11),
+    axis.text         = element_text(size = 10),
+    axis.text.x       = element_text(angle = 45, hjust = 1),
+    panel.grid.minor  = element_blank(),
+    legend.position   = "bottom"
+  )
+
+# 8) Exiba
+print(p)
+
+```
+
+- Grid Moeda Var Anual
+
+```{r}
+# Função para criar cada gráfico (ajustada para melhor visualização)
+criar_grafico_h2 <- function(serie1_nome, serie2_nome, series_test) {
+  
+  # Extrair as séries
+  serie1_z <- as.zoo(series_test[[serie1_nome]])
+  serie2_z <- as.zoo(series_test[[serie2_nome]])
+  
+  # Juntar as séries
+  df_z <- merge(serie1_z, serie2_z, all = TRUE)
+  colnames(df_z) <- c(serie1_nome, serie2_nome)
+  
+  # Transformar em data.frame
+  df <- fortify.zoo(df_z, name = "Date")
+  if (inherits(df$Date, "yearqtr")) {
+    df$Date <- as.Date(df$Date)
+  }
+  
+  # Calcular variação anual da primeira série
+  df <- df %>%
+    arrange(Date) %>%
+    mutate(
+      Variation = 100 * (exp(.data[[serie1_nome]]
+                             - lag(.data[[serie1_nome]], 4)) - 1)
+    ) %>%
+    filter(!is.na(Variation))
+  
+  # CORREÇÃO: Verificar se os spreads estão em decimal e converter para percentual
+  # Se os valores estão entre 0 e 1, multiplicar por 100
+  if (max(df[[serie2_nome]], na.rm = TRUE) < 1) {
+    df[[serie2_nome]] <- df[[serie2_nome]] * 100
+  }
+  
+  # Determinar o fator de escala
+  fator <- max(df$Variation, na.rm = TRUE) / max(df[[serie2_nome]], na.rm = TRUE)
+  
+  # Criar nomes para legenda
+  nome_var <- paste0(serie1_nome, " (Var. Anual)")
+  
+
+  
+  # Construir o gráfico
+  p <- ggplot(df, aes(x = Date)) +
+    geom_line(aes(y = Variation, color = nome_var),
+              linewidth = 1.2) +
+    geom_line(aes(y = .data[[serie2_nome]] * fator, color = serie2_nome),
+              linewidth = 1.2) +
+    scale_color_manual(values = setNames(c("#02023C", "#46B1E1"), 
+                                         c(nome_var, serie2_nome))) +
+    scale_x_date(date_breaks = "1 years",
+                 date_labels = "%Y",
+                 expand = c(0.01, 0.01),
+                 limits = c(min(df$Date), as.Date("2025-01-01"))) +
+    scale_y_continuous(
+      name = paste0(nome_var, " (%)"),
+      # ALTERAÇÃO SIMPLES: Apenas aumentar frequência dos breaks
+      breaks = scales::pretty_breaks(n = 10),  # Mais breaks no eixo primário
+      labels = percent_format(scale = 1, suffix = "%"),
+      sec.axis = sec_axis(
+        transform = ~ . / fator,
+        name = paste0(serie2_nome, " (%)"),
+        # Mais breaks no eixo secundário também
+        breaks = scales::pretty_breaks(n = 10),
+        labels = number_format(accuracy = 0.01, suffix = "%")
+      )
+    ) +
+    labs(
+      title = paste0("H2: ", serie1_nome, " vs ", serie2_nome),
+      x = "",
+      color = ""
+    ) +
+    theme_minimal() +
+    theme(
+      # ALTERAÇÃO 1: Aumentar tamanho dos eixos
+      # Para alterar manualmente, modifique os valores de size abaixo:
+      axis.title = element_text(size = 14),      # Era 10, agora 14 (títulos dos eixos)
+      axis.text = element_text(size = 12),       # Era 9, agora 12 (números dos eixos)
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 12),  # Eixo horizontal
+      
+      # ALTERAÇÃO 2: Aumentar tamanho do título
+      plot.title = element_text(size = 18, face = "bold"),  # Era 14, agora 18
+      
+      # ALTERAÇÃO 3: Aumentar tamanho da legenda
+      legend.text = element_text(size = 15),     # Era 9, agora 12
+      legend.title = element_text(size = 13),    # Adicionado título da legenda
+      
+      panel.grid.minor = element_blank(),
+      legend.position = "bottom",
+      plot.margin = margin(10, 10, 10, 10)
+    )
+  
+  return(p)
+}
+
+# Criar todos os gráficos
+p1 <- criar_grafico_h2("M1", "S2_POUPOVER", series_test)
+p2 <- criar_grafico_h2("M1", "S4_POUPSWAP", series_test)
+p5 <- criar_grafico_h2("M2", "S2_POUPOVER", series_test)
+p3 <- criar_grafico_h2("DV", "S2_POUPOVER", series_test)
+p4 <- criar_grafico_h2("DV", "S4_POUPSWAP", series_test)
+
+# Opção 1: Usar patchwork (recomendado)
+library(patchwork)
+
+# Criar layout 3x2 com espaço vazio no canto inferior direito
+combined_plot <- (p1 | p2) / (p3 | p4) / (p5 | plot_spacer()) +
+  plot_annotation(
+    title = "Análise H2: Agregados Monetários vs Indicadores de Poupança",
+    subtitle = "Período: 1Q2005 - 4Q2024",
+    caption = "Fonte: Elaboração própria",
+    theme = theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      plot.caption = element_text(size = 11)
+    )
+  )
+
+# Visualizar no RStudio
+print(combined_plot)
+
+# Salvar em alta resolução
+ggsave("h2_analise_completa.png", 
+       plot = combined_plot, 
+       width = 16, 
+       height = 20, 
+       dpi = 300,
+       bg = "white")
+```
+
+Grid Moeda var Trimestral
+
+```{r}
+# Função para criar cada gráfico (ajustada para variação trimestral)
+criar_grafico_h2 <- function(serie1_nome, serie2_nome, series_test) {
+  
+  # Extrair as séries
+  serie1_z <- as.zoo(series_test[[serie1_nome]])
+  serie2_z <- as.zoo(series_test[[serie2_nome]])
+  
+  # Juntar as séries
+  df_z <- merge(serie1_z, serie2_z, all = TRUE)
+  colnames(df_z) <- c(serie1_nome, serie2_nome)
+  
+  # Transformar em data.frame
+  df <- fortify.zoo(df_z, name = "Date")
+  if (inherits(df$Date, "yearqtr")) {
+    df$Date <- as.Date(df$Date)
+  }
+  
+  # Calcular variação TRIMESTRAL da primeira série (mudança principal)
+  df <- df %>%
+    arrange(Date) %>%
+    mutate(
+      Variation = (.data[[serie1_nome]] / lag(.data[[serie1_nome]], 1) - 1) * 100
+    ) %>%
+    filter(!is.na(Variation))
+  
+  # CORREÇÃO: Verificar se os spreads estão em decimal e converter para percentual
+  # Se os valores estão entre 0 e 1, multiplicar por 100
+  if (max(df[[serie2_nome]], na.rm = TRUE) < 1) {
+    df[[serie2_nome]] <- df[[serie2_nome]] * 100
+  }
+  
+  # Determinar o fator de escala
+  fator <- max(df$Variation, na.rm = TRUE) / max(df[[serie2_nome]], na.rm = TRUE)
+  
+  # Criar nomes para legenda (atualizado para trimestral)
+  nome_var <- paste0(serie1_nome, " (Var. Trimestral)")
+  
+  # Construir o gráfico
+  p <- ggplot(df, aes(x = Date)) +
+    geom_line(aes(y = Variation, color = nome_var),
+              linewidth = 1.2) +
+    geom_line(aes(y = .data[[serie2_nome]] * fator, color = serie2_nome),
+              linewidth = 1.2) +
+    scale_color_manual(values = setNames(c("#02023C", "#46B1E1"), 
+                                         c(nome_var, serie2_nome))) +
+    scale_x_date(date_breaks = "1 years",
+                 date_labels = "%Y",
+                 expand = c(0.01, 0.01),
+                 limits = c(min(df$Date), as.Date("2025-01-01"))) +
+    scale_y_continuous(
+      name = paste0(nome_var, " (%)"),
+      # ALTERAÇÃO SIMPLES: Apenas aumentar frequência dos breaks
+      breaks = scales::pretty_breaks(n = 10),  # Mais breaks no eixo primário
+      labels = percent_format(scale = 1, suffix = "%"),
+      sec.axis = sec_axis(
+        transform = ~ . / fator,
+        name = paste0(serie2_nome, " (%)"),
+        # Mais breaks no eixo secundário também
+        breaks = scales::pretty_breaks(n = 10),
+        labels = number_format(accuracy = 0.01, suffix = "%")
+      )
+    ) +
+    labs(
+      title = paste0("H2: ", serie1_nome, " vs ", serie2_nome),
+      x = "",
+      color = ""
+    ) +
+    theme_minimal() +
+    theme(
+      # ALTERAÇÃO 1: Aumentar tamanho dos eixos
+      # Para alterar manualmente, modifique os valores de size abaixo:
+      axis.title = element_text(size = 14),      # Era 10, agora 14 (títulos dos eixos)
+      axis.text = element_text(size = 12),       # Era 9, agora 12 (números dos eixos)
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 12),  # Eixo horizontal
+      
+      # ALTERAÇÃO 2: Aumentar tamanho do título
+      plot.title = element_text(size = 18, face = "bold"),  # Era 14, agora 18
+      
+      # ALTERAÇÃO 3: Aumentar tamanho da legenda
+      legend.text = element_text(size = 15),     # Era 9, agora 12
+      legend.title = element_text(size = 13),    # Adicionado título da legenda
+      
+      panel.grid.minor = element_blank(),
+      legend.position = "bottom",
+      plot.margin = margin(10, 10, 10, 10)
+    )
+  
+  return(p)
+}
+
+# Criar todos os gráficos
+p1 <- criar_grafico_h2("M1", "S2_POUPOVER", series_test)
+p2 <- criar_grafico_h2("M1", "S4_POUPSWAP", series_test)
+p5 <- criar_grafico_h2("M2", "S2_POUPOVER", series_test)
+p3 <- criar_grafico_h2("DV", "S2_POUPOVER", series_test)
+p4 <- criar_grafico_h2("DV", "S4_POUPSWAP", series_test)
+
+# Opção 1: Usar patchwork (recomendado)
+library(patchwork)
+
+# Criar layout 3x2 com espaço vazio no canto inferior direito
+combined_plot <- (p1 | p2) / (p3 | p4) / (p5 | plot_spacer()) +
+  plot_annotation(
+    title = "Análise H2: Agregados Monetários vs Indicadores de Poupança",
+    subtitle = "Período: 1Q2005 - 4Q2024 (Variação Trimestral)",
+    caption = "Fonte: Elaboração própria",
+    theme = theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      plot.caption = element_text(size = 11)
+    )
+  )
+
+# Visualizar no RStudio
+print(combined_plot)
+
+# Salvar em alta resolução
+ggsave("h2_analise_completa_trimestral.png", 
+       plot = combined_plot, 
+       width = 16, 
+       height = 20, 
+       dpi = 300,
+       bg = "white")
+```
+
+Grid Moeda without var
+
+```{r}
+# Função para criar cada gráfico (ajustada para variação trimestral)
+criar_grafico_h2 <- function(serie1_nome, serie2_nome, series_test) {
+  
+  # Extrair as séries
+  serie1_z <- as.zoo(series_test[[serie1_nome]])
+  serie2_z <- as.zoo(series_test[[serie2_nome]])
+  
+  # Juntar as séries
+  df_z <- merge(serie1_z, serie2_z, all = TRUE)
+  colnames(df_z) <- c(serie1_nome, serie2_nome)
+  
+  # Transformar em data.frame
+  df <- fortify.zoo(df_z, name = "Date")
+  if (inherits(df$Date, "yearqtr")) {
+    df$Date <- as.Date(df$Date)
+  }
+  
+  # Manter a primeira série em nível (sem variação)
+  df <- df %>%
+    arrange(Date) %>%
+    mutate(
+      Variation = .data[[serie1_nome]]
+    ) %>%
+    filter(!is.na(Variation))
+  
+  # CORREÇÃO: Verificar se os spreads estão em decimal e converter para percentual
+  # Se os valores estão entre 0 e 1, multiplicar por 100
+  if (max(df[[serie2_nome]], na.rm = TRUE) < 1) {
+    df[[serie2_nome]] <- df[[serie2_nome]] * 100
+  }
+  
+  # Calcular limites do eixo Y baseado nos dados reais
+  y_min <- min(df$Variation, na.rm = TRUE)
+  y_max <- max(df$Variation, na.rm = TRUE)
+  y_range <- y_max - y_min
+  
+  # Adicionar margem de 5% acima e abaixo
+  y_limits <- c(y_min - 0.05 * y_range, y_max + 0.05 * y_range)
+  
+  # Determinar o fator de escala usando os limites ajustados
+  fator <- (y_limits[2] - y_limits[1]) / (max(df[[serie2_nome]], na.rm = TRUE) - min(df[[serie2_nome]], na.rm = TRUE))
+  
+  # Criar nomes para legenda (série em nível)
+  nome_var <- serie1_nome
+  
+  # Construir o gráfico
+  p <- ggplot(df, aes(x = Date)) +
+    geom_line(aes(y = Variation, color = nome_var),
+              linewidth = 1.2) +
+    geom_line(aes(y = .data[[serie2_nome]] * fator + y_limits[1], color = serie2_nome),
+              linewidth = 1.2) +
+    scale_color_manual(values = setNames(c("#02023C", "#46B1E1"), 
+                                         c(nome_var, serie2_nome))) +
+    scale_x_date(date_breaks = "1 years",
+                 date_labels = "%Y",
+                 expand = c(0.01, 0.01),
+                 limits = c(min(df$Date), as.Date("2025-01-01"))) +
+    scale_y_continuous(
+      name = paste0(nome_var, " (ln)"),
+      # Breaks ajustados para o range real dos dados
+      breaks = scales::pretty_breaks(n = 8),
+      labels = number_format(accuracy = 0.1),
+      limits = y_limits,
+      sec.axis = sec_axis(
+        transform = ~ (. - y_limits[1]) / fator,
+        name = paste0(serie2_nome, " (%)"),
+        breaks = scales::pretty_breaks(n = 8),
+        labels = number_format(accuracy = 0.01, suffix = "%")
+      )
+    ) +
+    coord_cartesian(ylim = y_limits) +  # Força os limites do eixo Y
+    labs(
+      title = paste0("H2: ", serie1_nome, " vs ", serie2_nome),
+      x = "",
+      color = ""
+    ) +
+    theme_minimal() +
+    theme(
+      # ALTERAÇÃO 1: Aumentar tamanho dos eixos
+      # Para alterar manualmente, modifique os valores de size abaixo:
+      axis.title = element_text(size = 14),      # Era 10, agora 14 (títulos dos eixos)
+      axis.text = element_text(size = 12),       # Era 9, agora 12 (números dos eixos)
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 12),  # Eixo horizontal
+      
+      # ALTERAÇÃO 2: Aumentar tamanho do título
+      plot.title = element_text(size = 18, face = "bold"),  # Era 14, agora 18
+      
+      # ALTERAÇÃO 3: Aumentar tamanho da legenda
+      legend.text = element_text(size = 15),     # Era 9, agora 12
+      legend.title = element_text(size = 13),    # Adicionado título da legenda
+      
+      panel.grid.minor = element_blank(),
+      legend.position = "bottom",
+      plot.margin = margin(10, 10, 10, 10)
+    )
+  
+  return(p)
+}
+
+# Criar todos os gráficos
+p1 <- criar_grafico_h2("M1", "S2_POUPOVER", series_test)
+p2 <- criar_grafico_h2("M1", "S4_POUPSWAP", series_test)
+p5 <- criar_grafico_h2("M2", "S2_POUPOVER", series_test)
+p3 <- criar_grafico_h2("DV", "S2_POUPOVER", series_test)
+p4 <- criar_grafico_h2("DV", "S4_POUPSWAP", series_test)
+
+# Opção 1: Usar patchwork (recomendado)
+library(patchwork)
+
+# Criar layout 3x2 com espaço vazio no canto inferior direito
+combined_plot <- (p1 | p2) / (p3 | p4) / (p5 | plot_spacer()) +
+  plot_annotation(
+    title = "Análise H2: Agregados Monetários vs Indicadores de Poupança",
+    subtitle = "Período: 1Q2005 - 4Q2024 (Agregados Monetários em ln)",
+    caption = "Fonte: Elaboração própria",
+    theme = theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      plot.caption = element_text(size = 11)
+    )
+  )
+
+# Visualizar no RStudio
+print(combined_plot)
+
+# Salvar em alta resolução
+ggsave("h2_analise_completa_ln.png", 
+       plot = combined_plot, 
+       width = 16, 
+       height = 20, 
+       dpi = 300,
+       bg = "white")
+
+```
+
+#_________
+# 📂️ Backup
