@@ -16,7 +16,7 @@ The study investigates whether monetary and credit distortions in Brazil (from 2
 
 | File | Description |
 |------|-------------|
-| **[`TCC_Lauro Aguiar.Rmd`](TCC_Lauro%20Aguiar.Rmd.Rmd)** | The **R source code** containing data extraction (APIs), econometric tests (Granger, VAR), and visualization scripts. |
+| **[`TCC_Lauro Aguiar.Rmd`](TCC_Lauro%20Aguiar.Rmd)** | The **R source code** containing data extraction (APIs), econometric tests (Granger, VAR), and visualization scripts. |
 | **[`Full Thesis.pdf`](TCC%20-%20Ciclos%20Econômicos%20e%20Distorções%20Monetárias%20-%20Uma%20Leitura%20da%20Escola%20Austríaca%20nos%20Últimos%2021%20anos..pdf)** | The **complete academic paper** with theoretical framework, literature review, and detailed interpretation of results. |
 
 ---
