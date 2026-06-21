@@ -1,4 +1,4 @@
-# 📉 TEST - Economic Cycles & Monetary Distortions: An Austrian Perspective on Brazil (2004-2024)
+# 📉 Economic Cycles & Monetary Distortions: An Austrian Perspective on Brazil (2004-2024)
 
 > **Bachelor's Thesis (TCC) analyzing the applicability of the Austrian Business Cycle Theory (ABCT) to the Brazilian economy.**
 
